@@ -1633,6 +1633,18 @@
       backdrop-filter:blur(7px);
     }
 
+
+    .camera-side-actions{display:flex;gap:7px;align-items:center}
+    .camera-road-hint{
+      position:absolute;left:50%;
+      top:max(188px,calc(env(safe-area-inset-top) + 180px));
+      z-index:4;transform:translateX(-50%);
+      padding:5px 9px;border:1px solid rgba(125,211,252,.18);
+      border-radius:999px;background:rgba(2,6,12,.48);
+      color:#bae6fd;font-size:8px;font-weight:850;
+      white-space:nowrap;pointer-events:none;backdrop-filter:blur(7px)
+    }
+
 </style>
 </head>
 <body>
@@ -1932,9 +1944,14 @@
       <div class="camera-health-track"><div id="camera-zombie-health"></div></div>
     </div>
 
-    <button id="camera-switch" type="button" class="camera-icon-button" onclick="switchEncounterCamera()" aria-label="Trocar câmera">
-      <i class="fa-solid fa-camera-rotate"></i>
-    </button>
+    <div class="camera-side-actions">
+      <button id="camera-gyro-calibrate" type="button" class="camera-icon-button" onclick="recalibrateCameraGyro()" aria-label="Recalibrar giroscópio">
+        <i class="fa-solid fa-compass"></i>
+      </button>
+      <button id="camera-switch" type="button" class="camera-icon-button" onclick="switchEncounterCamera()" aria-label="Trocar câmera">
+        <i class="fa-solid fa-camera-rotate"></i>
+      </button>
+    </div>
   </div>
 
   <div id="camera-loading" class="camera-loading">
@@ -2117,6 +2134,11 @@
         cameraNearZ: -2.55,
         cameraFarScale: 0.58,
         cameraNearScale: 1.12,
+        cameraRoadWidthMeters: 7,
+        cameraRoadMaxSnapMeters: 18,
+        cameraGyroPitchLimit: 28,
+        cameraGyroRollLimit: 18,
+        cameraGyroSmoothing: 0.12,
         cameraEncounterMaxAccuracy: 65,
         cameraZombieHealth: 100,
         cameraPlayerDamage: 25,
@@ -2959,9 +2981,17 @@
         clips: [],
         deviceHeading: null,
         viewHeading: null,
+        devicePitch: 0,
+        deviceRoll: 0,
+        targetPitch: 0,
+        targetRoll: 0,
+        neutralBeta: null,
+        neutralGamma: null,
         orientationHandler: null,
         lastOrientationAt: 0,
         secondarySyncAt: 0,
+        roadCorridors: new Map(),
+        corridorMaterial: null,
         clock: null,
         raf: null,
         animTimeout: null,
@@ -3056,11 +3086,29 @@
 
         CAMERA3D.orientationHandler = event => {
             const heading = readDeviceHeading(event);
-            if (!Number.isFinite(heading)) return;
 
-            CAMERA3D.deviceHeading = smoothHeading(CAMERA3D.deviceHeading, heading, .22);
-            CAMERA3D.viewHeading = CAMERA3D.deviceHeading;
-            CAMERA3D.lastOrientationAt = Date.now();
+            if (Number.isFinite(heading)) {
+                CAMERA3D.deviceHeading = smoothHeading(CAMERA3D.deviceHeading, heading, .22);
+                CAMERA3D.viewHeading = CAMERA3D.deviceHeading;
+                CAMERA3D.lastOrientationAt = Date.now();
+            }
+
+            if (Number.isFinite(event.beta) && Number.isFinite(event.gamma)) {
+                if (!Number.isFinite(CAMERA3D.neutralBeta)) CAMERA3D.neutralBeta = event.beta;
+                if (!Number.isFinite(CAMERA3D.neutralGamma)) CAMERA3D.neutralGamma = event.gamma;
+
+                const rawPitch = event.beta - CAMERA3D.neutralBeta;
+                const rawRoll = event.gamma - CAMERA3D.neutralGamma;
+
+                CAMERA3D.targetPitch = Math.max(
+                    -CONFIG.cameraGyroPitchLimit,
+                    Math.min(CONFIG.cameraGyroPitchLimit, rawPitch)
+                );
+                CAMERA3D.targetRoll = Math.max(
+                    -CONFIG.cameraGyroRollLimit,
+                    Math.min(CONFIG.cameraGyroRollLimit, rawRoll)
+                );
+            }
         };
 
         // O navegador pode oferecer apenas um dos dois eventos.
@@ -3175,9 +3223,12 @@
     function positionCameraZombieModel(model, zombie, isPrimary = false) {
         if (!model || !zombie || !STATE.playerLocation || !CAMERA3D.camera) return;
 
-        const distance = getDistance(STATE.playerLocation, zombie.loc);
+        const road = syncRoadCorridorForZombie(zombie);
+        const visualLoc = road?.loc || zombie.loc;
+
+        const distance = getDistance(STATE.playerLocation, visualLoc);
         const heading = currentCameraHeading();
-        const bearing = geographicBearing(STATE.playerLocation, zombie.loc);
+        const bearing = geographicBearing(STATE.playerLocation, visualLoc);
         const relativeBearing = signedAngleDelta(bearing - heading);
 
         const farDistance = Math.max(
@@ -3240,6 +3291,191 @@
             }
             positionCameraZombieModel(entry.model, zombie, false);
         }
+    }
+
+    function projectPointToRoadEdge(point, edge) {
+        if (!point || !edge) return null;
+        const a = STATE.roadNodes.get(edge.a);
+        const b = STATE.roadNodes.get(edge.b);
+        if (!a || !b) return null;
+
+        const lat0 = point.lat * Math.PI / 180;
+        const cos = Math.cos(lat0);
+        const ax = (a.lng - point.lng) * 111320 * cos;
+        const ay = (a.lat - point.lat) * 111320;
+        const bx = (b.lng - point.lng) * 111320 * cos;
+        const by = (b.lat - point.lat) * 111320;
+        const dx = bx - ax, dy = by - ay;
+        const lenSq = dx * dx + dy * dy;
+        const t = lenSq ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / lenSq)) : 0;
+
+        return {
+            loc: L.latLng(
+                a.lat + (b.lat - a.lat) * t,
+                a.lng + (b.lng - a.lng) * t
+            ),
+            t,
+            distance: Math.hypot(ax + dx * t, ay + dy * t),
+            a,
+            b
+        };
+    }
+
+    function nearestRoadEdgeForZombie(zombie) {
+        if (!zombie || !STATE.roadEdgeList.length) return null;
+
+        if (zombie.currentEdgeId) {
+            const current = STATE.roadEdges.get(zombie.currentEdgeId);
+            if (current && !current.blocked) {
+                const projection = projectPointToRoadEdge(zombie.loc, current);
+                if (projection && projection.distance <= CONFIG.cameraRoadMaxSnapMeters) {
+                    return { edge: current, ...projection };
+                }
+            }
+        }
+
+        let best = null;
+        for (const edge of STATE.roadEdgeList) {
+            if (edge.blocked) continue;
+            const projection = projectPointToRoadEdge(zombie.loc, edge);
+            if (!projection || projection.distance > CONFIG.cameraRoadMaxSnapMeters) continue;
+            if (!best || projection.distance < best.distance) {
+                best = { edge, ...projection };
+            }
+        }
+        return best;
+    }
+
+    function cameraMapPointToXZ(point) {
+        if (!point || !STATE.playerLocation) return null;
+
+        const distance = getDistance(STATE.playerLocation, point);
+        const heading = currentCameraHeading();
+        const bearing = geographicBearing(STATE.playerLocation, point);
+        const relativeBearing = signedAngleDelta(bearing - heading);
+
+        const farDistance = Math.max(
+            CONFIG.cameraEncounterDistance + 1,
+            Math.min(CONFIG.cameraViewMaxDistance || CONFIG.zombieRadarRadius, CONFIG.zombieRadarRadius)
+        );
+
+        const proximity = Math.max(0, Math.min(1,
+            (farDistance - distance) /
+            Math.max(1, farDistance - CONFIG.cameraEncounterDistance)
+        ));
+
+        const depth = CONFIG.cameraFarZ +
+            (CONFIG.cameraNearZ - CONFIG.cameraFarZ) * proximity;
+
+        const visibleAngle = 86;
+        const clampedAngle = Math.max(-visibleAngle, Math.min(visibleAngle, relativeBearing));
+        const x = Math.abs(relativeBearing) >= 100
+            ? Math.sign(relativeBearing || 1) * 100
+            : Math.abs(depth) * Math.tan(clampedAngle * Math.PI / 180);
+
+        return { x, z: depth, distance, bearing, relativeBearing, proximity };
+    }
+
+    function ensureRoadCorridorMaterial() {
+        if (CAMERA3D.corridorMaterial || !CAMERA3D.THREE) return CAMERA3D.corridorMaterial;
+        CAMERA3D.corridorMaterial = new CAMERA3D.THREE.MeshBasicMaterial({
+            color: 0x7dd3fc,
+            transparent: true,
+            opacity: 0.08,
+            depthWrite: false,
+            side: CAMERA3D.THREE.DoubleSide
+        });
+        return CAMERA3D.corridorMaterial;
+    }
+
+    function removeRoadCorridor(id) {
+        const mesh = CAMERA3D.roadCorridors.get(id);
+        if (!mesh) return;
+        try {
+            CAMERA3D.scene?.remove(mesh);
+            mesh.geometry?.dispose?.();
+        } catch (_) {}
+        CAMERA3D.roadCorridors.delete(id);
+    }
+
+    function syncRoadCorridorForZombie(zombie) {
+        if (!CAMERA3D.scene || !CAMERA3D.THREE || !zombie || !STATE.playerLocation) return null;
+
+        const road = nearestRoadEdgeForZombie(zombie);
+        if (!road) {
+            removeRoadCorridor(zombie.id);
+            return null;
+        }
+
+        const aPoint = L.latLng(road.a.lat, road.a.lng);
+        const bPoint = L.latLng(road.b.lat, road.b.lng);
+        const a3 = cameraMapPointToXZ(aPoint);
+        const b3 = cameraMapPointToXZ(bPoint);
+        if (!a3 || !b3) return road;
+
+        const dx = b3.x - a3.x;
+        const dz = b3.z - a3.z;
+        const sceneLength = Math.hypot(dx, dz);
+        if (sceneLength < 0.02) {
+            removeRoadCorridor(zombie.id);
+            return road;
+        }
+
+        const avgDistance = Math.max(6, (a3.distance + b3.distance) * .5);
+        const widthScene = Math.max(
+            0.16,
+            Math.min(1.2, (CONFIG.cameraRoadWidthMeters / avgDistance) * Math.abs((a3.z + b3.z) * .5))
+        );
+
+        const nx = -dz / sceneLength;
+        const nz = dx / sceneLength;
+        const halfW = widthScene * .5;
+
+        const vertices = new Float32Array([
+            a3.x + nx * halfW, CAMERA3D.baseY - 0.95, a3.z + nz * halfW,
+            a3.x - nx * halfW, CAMERA3D.baseY - 0.95, a3.z - nz * halfW,
+            b3.x + nx * halfW, CAMERA3D.baseY - 0.95, b3.z + nz * halfW,
+            a3.x - nx * halfW, CAMERA3D.baseY - 0.95, a3.z - nz * halfW,
+            b3.x - nx * halfW, CAMERA3D.baseY - 0.95, b3.z - nz * halfW,
+            b3.x + nx * halfW, CAMERA3D.baseY - 0.95, b3.z + nz * halfW
+        ]);
+
+        let mesh = CAMERA3D.roadCorridors.get(zombie.id);
+        if (!mesh) {
+            const geometry = new CAMERA3D.THREE.BufferGeometry();
+            geometry.setAttribute('position', new CAMERA3D.THREE.BufferAttribute(vertices, 3));
+            mesh = new CAMERA3D.THREE.Mesh(geometry, ensureRoadCorridorMaterial());
+            mesh.renderOrder = -5;
+            CAMERA3D.scene.add(mesh);
+            CAMERA3D.roadCorridors.set(zombie.id, mesh);
+        } else {
+            mesh.geometry.setAttribute('position', new CAMERA3D.THREE.BufferAttribute(vertices, 3));
+            mesh.geometry.attributes.position.needsUpdate = true;
+            mesh.geometry.computeBoundingSphere();
+        }
+
+        mesh.visible =
+            a3.distance <= CONFIG.zombieRadarRadius + 40 ||
+            b3.distance <= CONFIG.zombieRadarRadius + 40;
+
+        return road;
+    }
+
+    function clearRoadCorridors() {
+        for (const id of [...CAMERA3D.roadCorridors.keys()]) removeRoadCorridor(id);
+        CAMERA3D.roadCorridors.clear();
+        try { CAMERA3D.corridorMaterial?.dispose?.(); } catch (_) {}
+        CAMERA3D.corridorMaterial = null;
+    }
+
+    function recalibrateCameraGyro() {
+        CAMERA3D.neutralBeta = null;
+        CAMERA3D.neutralGamma = null;
+        CAMERA3D.targetPitch = 0;
+        CAMERA3D.targetRoll = 0;
+        CAMERA3D.devicePitch = 0;
+        CAMERA3D.deviceRoll = 0;
+        showToast('Giroscópio recalibrado.', 'fa-compass', 'text-sky-300');
     }
 
     function getNearestDetectedZombieForCamera() {
@@ -3506,6 +3742,7 @@
             removeSecondaryCameraZombie(id);
         }
         CAMERA3D.secondaryModels.clear();
+        clearRoadCorridors();
 
         if (CAMERA3D.model) {
             CAMERA3D.model.traverse(obj => {
@@ -3535,6 +3772,12 @@
         CAMERA3D.currentMotion = null;
         CAMERA3D.deviceHeading = null;
         CAMERA3D.viewHeading = null;
+        CAMERA3D.devicePitch = 0;
+        CAMERA3D.deviceRoll = 0;
+        CAMERA3D.targetPitch = 0;
+        CAMERA3D.targetRoll = 0;
+        CAMERA3D.neutralBeta = null;
+        CAMERA3D.neutralGamma = null;
         CAMERA3D.lastOrientationAt = 0;
         CAMERA3D.secondarySyncAt = 0;
         CAMERA3D.mixer = null;
@@ -3650,6 +3893,17 @@
             if (CAMERA3D.mixer) CAMERA3D.mixer.update(dt);
             for (const entry of CAMERA3D.secondaryModels.values()) {
                 entry.mixer?.update(dt);
+            }
+
+            // Inclinação imersiva por giroscópio, suavizada.
+            const gyroEase = CONFIG.cameraGyroSmoothing;
+            CAMERA3D.devicePitch += (CAMERA3D.targetPitch - CAMERA3D.devicePitch) * gyroEase;
+            CAMERA3D.deviceRoll += (CAMERA3D.targetRoll - CAMERA3D.deviceRoll) * gyroEase;
+
+            if (CAMERA3D.camera) {
+                CAMERA3D.camera.rotation.order = 'YXZ';
+                CAMERA3D.camera.rotation.x = -CAMERA3D.THREE.MathUtils.degToRad(CAMERA3D.devicePitch * .55);
+                CAMERA3D.camera.rotation.z = -CAMERA3D.THREE.MathUtils.degToRad(CAMERA3D.deviceRoll * .38);
             }
 
             // Movimento respiratório/sutil para não parecer uma estátua quando
