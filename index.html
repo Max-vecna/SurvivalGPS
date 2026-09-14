@@ -2064,7 +2064,7 @@
         cameraPlayerAttackCooldown: 650,
         cameraZombieAttackMinMs: 2300,
         cameraZombieAttackMaxMs: 3400,
-        cameraModelUrl: 'assets/zombie.glb',
+        cameraModelUrl: './assets/zombie.glb',
 
         maxZombies: 15, maxResources: 20, spawnRadius: 200, updateInterval: 1000
     };
@@ -3153,7 +3153,13 @@
                 CONFIG.cameraModelUrl,
                 resolve,
                 undefined,
-                reject
+                (error) => {
+                    console.error('Erro GLTFLoader em', CONFIG.cameraModelUrl, error);
+                    const status = error?.target?.status;
+                    reject(new Error(status
+                        ? `GLB HTTP ${status}: ${CONFIG.cameraModelUrl}`
+                        : `Falha GLB: ${CONFIG.cameraModelUrl}`));
+                }
             );
         });
 
@@ -3305,22 +3311,15 @@
         updateEncounterAvailability();
         updateCameraEncounterUI();
 
+        // 1) A câmera é iniciada e validada separadamente.
+        // Assim uma falha do Three.js/GLB não é mostrada como falha da câmera.
         try {
-            await Promise.all([
-                requestEncounterCamera(),
-                initCamera3DModel()
-            ]);
-
-            if (!STATE.cameraEncounterActive) return;
-
-            loading.classList.add('hidden');
-            STATE.encounterAttackReady = true;
-            attack.disabled = false;
-            scheduleCameraZombieAttack();
+            loadingText.textContent = 'Abrindo câmera…';
+            await requestEncounterCamera();
         } catch (error) {
-            console.error('Falha ao abrir encontro de câmera:', error);
+            console.error('Falha real ao abrir a câmera:', error);
 
-            let message = 'Não foi possível iniciar a câmera.';
+            let message = 'Não foi possível abrir a câmera.';
             if (String(error?.message || error) === 'camera-secure-context') {
                 message = 'A câmera exige HTTPS ou localhost.';
             } else if (String(error?.message || error) === 'camera-api') {
@@ -3329,13 +3328,92 @@
                 message = 'Permissão da câmera negada.';
             } else if (error?.name === 'NotFoundError') {
                 message = 'Nenhuma câmera compatível foi encontrada.';
+            } else if (error?.name === 'NotReadableError') {
+                message = 'A câmera está sendo usada por outro aplicativo.';
             }
 
             loadingText.textContent = message;
             showToast(message, 'fa-camera', 'text-red-400');
+
             setTimeout(() => {
                 if (STATE.cameraEncounterActive) closeCameraEncounter();
             }, 1800);
+            return;
+        }
+
+        if (!STATE.cameraEncounterActive) return;
+
+        // A câmera já está funcionando neste ponto.
+        loadingText.textContent = 'Câmera ativa · carregando zumbi 3D…';
+
+        // 2) Carrega Three.js + GLB sem derrubar a câmera em caso de falha.
+        try {
+            await initCamera3DModel();
+
+            if (!STATE.cameraEncounterActive) return;
+
+            loading.classList.add('hidden');
+            STATE.encounterAttackReady = true;
+            attack.disabled = false;
+            scheduleCameraZombieAttack();
+        } catch (error) {
+            console.error('A câmera abriu, mas o modelo 3D falhou:', error);
+
+            // Mantém a câmera aberta para deixar claro que getUserMedia funcionou.
+            // O erro agora identifica corretamente a etapa que falhou.
+            let detail = 'Não foi possível carregar o zumbi 3D.';
+            const msg = String(error?.message || error || '');
+
+            if (msg.includes('Three.js') || msg.includes('GLTFLoader')) {
+                detail = 'Câmera ativa · falha ao carregar a biblioteca 3D.';
+            } else if (msg.includes('404') || msg.includes('Failed to fetch') || msg.includes('fetch')) {
+                detail = 'Câmera ativa · arquivo zombie.glb não foi encontrado.';
+            }
+
+            loadingText.innerHTML = `${detail}<br><small style="opacity:.72">Verifique se <b>assets/zombie.glb</b> está junto do index.html.</small>`;
+            showToast(detail, 'fa-cube', 'text-yellow-300');
+
+            // Deixa um botão para tentar carregar o modelo novamente sem fechar a câmera.
+            let retry = document.getElementById('camera-model-retry');
+            if (!retry) {
+                retry = document.createElement('button');
+                retry.id = 'camera-model-retry';
+                retry.type = 'button';
+                retry.textContent = 'TENTAR MODELO NOVAMENTE';
+                retry.style.cssText = 'margin-top:10px;padding:9px 12px;border:1px solid rgba(255,255,255,.2);border-radius:10px;background:#1e293b;color:white;font-size:9px;font-weight:900;';
+                retry.onclick = retryCamera3DModel;
+                loading.appendChild(retry);
+            }
+        }
+    }
+
+    async function retryCamera3DModel() {
+        if (!STATE.cameraEncounterActive) return;
+
+        const loading = document.getElementById('camera-loading');
+        const loadingText = document.getElementById('camera-loading-text');
+        const attack = document.getElementById('camera-attack');
+        const retry = document.getElementById('camera-model-retry');
+
+        if (retry) retry.disabled = true;
+        loadingText.textContent = 'Tentando carregar o zumbi 3D novamente…';
+
+        try {
+            disposeCamera3D();
+            await initCamera3DModel();
+
+            if (!STATE.cameraEncounterActive) return;
+
+            retry?.remove();
+            loading.classList.add('hidden');
+            STATE.encounterAttackReady = true;
+            attack.disabled = false;
+            scheduleCameraZombieAttack();
+            showToast('Zumbi 3D carregado.', 'fa-cube', 'text-emerald-300');
+        } catch (error) {
+            console.error('Nova tentativa do modelo 3D falhou:', error);
+            loadingText.innerHTML = 'Câmera ativa · o modelo 3D ainda não carregou.<br><small style="opacity:.72">Confira assets/zombie.glb e a conexão com os CDNs.</small>';
+            if (retry) retry.disabled = false;
         }
     }
 
@@ -3424,6 +3502,8 @@
         overlay.classList.remove('active');
         overlay.setAttribute('aria-hidden', 'true');
         document.body.classList.remove('camera-open');
+
+        document.getElementById('camera-model-retry')?.remove();
 
         const attack = document.getElementById('camera-attack');
         attack.disabled = false;
