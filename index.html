@@ -1579,6 +1579,40 @@
       #collect-resource-btn{min-width:82px}
     }
 
+
+    /* Distância acima de cada zumbi visível */
+    .zombie-marker-wrap{
+      position:relative;
+      width:34px;
+      height:34px;
+      overflow:visible;
+    }
+    .zombie-distance-label{
+      position:absolute;
+      left:50%;
+      bottom:39px;
+      transform:translateX(-50%);
+      min-width:42px;
+      padding:3px 6px;
+      border:1px solid rgba(248,113,113,.42);
+      border-radius:999px;
+      background:rgba(10,14,20,.92);
+      color:#fecaca;
+      font-size:9px;
+      font-weight:950;
+      line-height:1;
+      text-align:center;
+      white-space:nowrap;
+      box-shadow:0 5px 14px rgba(0,0,0,.4);
+      pointer-events:none;
+      backdrop-filter:blur(6px);
+    }
+    .zombie-distance-label.danger{
+      color:#fff;
+      background:rgba(185,28,28,.95);
+      border-color:rgba(254,202,202,.65);
+    }
+
 </style>
 </head>
 <body>
@@ -2064,7 +2098,7 @@
         cameraPlayerAttackCooldown: 650,
         cameraZombieAttackMinMs: 2300,
         cameraZombieAttackMaxMs: 3400,
-        cameraModelUrl: './assets/zombie.glb',
+        cameraModelUrl: './zombie.glb',
 
         maxZombies: 15, maxResources: 20, spawnRadius: 200, updateInterval: 1000
     };
@@ -2709,6 +2743,28 @@
             getDistance(STATE.playerLocation, resource.loc) <= CONFIG.resourceRadarRadius;
     }
 
+
+    function updateZombieDistanceLabel(zombie) {
+        if (!zombie?.marker || !STATE.playerLocation) return;
+
+        const markerEl = zombie.marker.getElement?.();
+        if (!markerEl) return;
+
+        const label = markerEl.querySelector('.zombie-distance-label');
+        if (!label) return;
+
+        const distance = getDistance(STATE.playerLocation, zombie.loc);
+        label.textContent = `${Math.round(distance)} m`;
+        label.classList.toggle('danger', distance <= CONFIG.cameraEncounterDistance);
+    }
+
+    function updateAllZombieDistanceLabels() {
+        if (!STATE.playerLocation) return;
+        for (const zombie of ENTITIES.zombies) {
+            updateZombieDistanceLabel(zombie);
+        }
+    }
+
     function updateRadarVisibility() {
         if (!STATE.playerLocation) return;
 
@@ -2725,6 +2781,7 @@
             setMarkerVisible(z.marker, detected);
         }
 
+        updateAllZombieDistanceLabels();
         renderRadarManagement();
         refreshExploreStatus();
         updateEncounterAvailability();
@@ -3932,6 +3989,7 @@
         ensureRadars(latlng);
         updateRadarVisibility();
         updateCameraEncounterUI();
+        updateAllZombieDistanceLabels();
         refreshExploreStatus();
         maybeRefreshRoadWorld();
 
@@ -4031,7 +4089,7 @@
         const ri = RESOURCE_ICONS[type];
         const resIcon = L.divIcon({
             className:'',
-            html:`<div class="resource-map-icon ${ri.cls}" title="${ri.title}"><i class="fa-solid ${ri.icon}"></i></div>`,
+            html:`<div class="zombie-marker-wrap"><div class="zombie-distance-label">-- m</div><div class="resource-map-icon ${ri.cls}" title="${ri.title}"><i class="fa-solid ${ri.icon}"></i></div></div>`,
             iconSize:[30,30], iconAnchor:[15,15]
         });
 
@@ -4094,6 +4152,8 @@
             STATE.zombieRadarBattery > 0 &&
             getDistance(STATE.playerLocation, loc) <= CONFIG.zombieRadarRadius
         );
+
+        requestAnimationFrame(() => updateZombieDistanceLabel(ENTITIES.zombies[ENTITIES.zombies.length - 1]));
     }
 
     function safeZoneContaining(point) {
