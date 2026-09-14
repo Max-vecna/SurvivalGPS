@@ -2091,6 +2091,11 @@
 
         // Encontro de câmera
         cameraEncounterDistance: 25,
+        cameraViewMaxDistance: 140,
+        cameraFarZ: -9.0,
+        cameraNearZ: -2.55,
+        cameraFarScale: 0.58,
+        cameraNearScale: 1.12,
         cameraEncounterMaxAccuracy: 65,
         cameraZombieHealth: 100,
         cameraPlayerDamage: 25,
@@ -2916,7 +2921,7 @@
 
     /* =========================================
        SISTEMA DE ENCONTRO DE CÂMERA
-       O GLB enviado pelo usuário é carregado como assets/zombie.glb.
+       O GLB é carregado como ./zombie.glb, na mesma pasta do index.html.
        ========================================= */
     const CAMERA3D = {
         THREE: null,
@@ -2924,6 +2929,8 @@
         scene: null,
         camera: null,
         model: null,
+        baseScale: 1,
+        currentMotion: null,
         mixer: null,
         clips: [],
         clock: null,
@@ -2942,27 +2949,95 @@
             return;
         }
 
-        const candidate = getNearestEncounterCandidate();
-        if (candidate) {
-            startCameraEncounter();
+        const detected = getNearestDetectedZombieForCamera();
+        if (!detected) {
+            showToast('Nenhum zumbi foi detectado pelo radar.', 'fa-camera', 'text-slate-300');
             return;
         }
 
-        let nearest = null;
-        let distance = Infinity;
+        startCameraEncounter(detected.zombie);
+    }
+
+    function getNearestDetectedZombieForCamera() {
+        if (!STATE.playerLocation ||
+            STATE.isDead ||
+            STATE.cameraEncounterActive ||
+            !STATE.zombieRadarEnabled ||
+            STATE.zombieRadarBattery <= 0) return null;
+
+        let best = null;
+        let bestDistance = Infinity;
+
         for (const z of ENTITIES.zombies) {
-            const d = STATE.playerLocation ? getDistance(STATE.playerLocation, z.loc) : Infinity;
-            if (d <= CONFIG.zombieRadarRadius && d < distance) {
-                nearest = z;
-                distance = d;
+            const d = getDistance(STATE.playerLocation, z.loc);
+            if (d <= CONFIG.zombieRadarRadius && d < bestDistance) {
+                best = z;
+                bestDistance = d;
+            }
+        }
+        return best ? { zombie: best, distance: bestDistance } : null;
+    }
+
+    function cameraDistanceForZombie(zombie = getEncounterZombie()) {
+        if (!zombie || !STATE.playerLocation) return Infinity;
+        return getDistance(STATE.playerLocation, zombie.loc);
+    }
+
+    function setCameraZombieMotion(label) {
+        if (!CAMERA3D.mixer || CAMERA3D.currentMotion === label) return;
+        CAMERA3D.currentMotion = label;
+        playCameraZombieAnimation(label, false, null);
+    }
+
+    function updateCameraZombieVisualByDistance() {
+        const zombie = getEncounterZombie();
+        if (!zombie || !CAMERA3D.model || !STATE.playerLocation) return;
+
+        const distance = cameraDistanceForZombie(zombie);
+        const farDistance = Math.max(
+            CONFIG.cameraEncounterDistance + 1,
+            Math.min(CONFIG.cameraViewMaxDistance || CONFIG.zombieRadarRadius, CONFIG.zombieRadarRadius)
+        );
+
+        const t = Math.max(0, Math.min(1,
+            (farDistance - distance) /
+            Math.max(1, farDistance - CONFIG.cameraEncounterDistance)
+        ));
+
+        const zPos = CONFIG.cameraFarZ + (CONFIG.cameraNearZ - CONFIG.cameraFarZ) * t;
+        const scaleFactor = CONFIG.cameraFarScale +
+            (CONFIG.cameraNearScale - CONFIG.cameraFarScale) * t;
+
+        CAMERA3D.model.position.z = zPos;
+        CAMERA3D.model.scale.setScalar(CAMERA3D.baseScale * scaleFactor);
+
+        const walkTime = performance.now() / 1000;
+        CAMERA3D.model.position.x = Math.sin(walkTime * (1.7 + t)) * (0.05 + t * 0.035);
+
+        const distanceText = document.getElementById('camera-distance-text');
+        if (distanceText) {
+            distanceText.textContent = distance <= CONFIG.cameraEncounterDistance
+                ? `Zumbi a ${Math.round(distance)} m · ALCANCE DE COMBATE`
+                : `Zumbi vindo · ${Math.round(distance)} m`;
+        }
+
+        const attack = document.getElementById('camera-attack');
+        if (attack) {
+            const inCombatRange = distance <= CONFIG.cameraEncounterDistance;
+            attack.disabled = !inCombatRange || !STATE.encounterAttackReady;
+            if (!inCombatRange) {
+                attack.innerHTML = `<i class="fa-solid fa-person-walking"></i> VINDO · ${Math.round(distance)} m`;
+            } else if (STATE.encounterAttackReady) {
+                attack.innerHTML = '<i class="fa-solid fa-hand-fist"></i> ATACAR';
             }
         }
 
-        if (nearest) {
-            showToast(`Aproxime-se do zumbi: ele está a ${Math.round(distance)} m. A câmera libera a ${CONFIG.cameraEncounterDistance} m.`,
-                'fa-camera', 'text-yellow-300');
-        } else {
-            showToast('Nenhum zumbi foi detectado pelo radar.', 'fa-camera', 'text-slate-300');
+        if (distance > CONFIG.cameraEncounterDistance) {
+            if (findCameraClip('Walk')) setCameraZombieMotion('Walk');
+            else if (findCameraClip('Walk2')) setCameraZombieMotion('Walk2');
+            else setCameraZombieMotion('Idle');
+        } else if (CAMERA3D.currentMotion === 'Walk' || CAMERA3D.currentMotion === 'Walk2') {
+            setCameraZombieMotion('Idle');
         }
     }
 
@@ -2997,7 +3072,7 @@
             STATE.cameraEncounterActive ||
             document.body.classList.contains('panel-open');
 
-        const candidate = blocked ? null : getNearestEncounterCandidate();
+        const candidate = blocked ? null : (getNearestEncounterCandidate() || getNearestDetectedZombieForCamera());
 
         if (!candidate) {
             btn.classList.remove('visible');
@@ -3007,6 +3082,10 @@
 
         distanceEl.textContent = `${Math.round(candidate.distance)} m`;
         btn.dataset.zombieId = String(candidate.zombie.id);
+        const mainLabel = btn.querySelector('span:not(.encounter-distance)');
+        if (mainLabel) {
+            mainLabel.textContent = candidate.distance <= CONFIG.cameraEncounterDistance ? 'ENFRENTAR' : 'CÂMERA';
+        }
         btn.classList.add('visible');
         document.body.classList.add('encounter-ready');
     }
@@ -3162,6 +3241,8 @@
         CAMERA3D.scene = null;
         CAMERA3D.camera = null;
         CAMERA3D.model = null;
+        CAMERA3D.baseScale = 1;
+        CAMERA3D.currentMotion = null;
         CAMERA3D.mixer = null;
         CAMERA3D.clips = [];
         CAMERA3D.clock = null;
@@ -3229,6 +3310,7 @@
         const tallest = Math.max(size.x, size.y, size.z, .001);
         const scale = 2.45 / tallest;
         model.scale.setScalar(scale);
+        CAMERA3D.baseScale = model.scale.x;
 
         box = new THREE.Box3().setFromObject(model);
         const center = box.getCenter(new THREE.Vector3());
@@ -3242,6 +3324,8 @@
 
         // Mantém o personagem central mesmo se o arquivo tiver origem fora do corpo.
         if (scaledSize.y < 1.1) model.scale.multiplyScalar(1.25);
+        CAMERA3D.baseScale = model.scale.x;
+        model.position.z = CONFIG.cameraFarZ;
 
         scene.add(model);
 
@@ -3272,11 +3356,13 @@
             if (CAMERA3D.model && !CAMERA3D.mixer) {
                 CAMERA3D.model.rotation.z = Math.sin(performance.now() * .0018) * .012;
             }
+            updateCameraZombieVisualByDistance();
             CAMERA3D.renderer.render(CAMERA3D.scene, CAMERA3D.camera);
         };
         renderFrame();
 
-        playCameraZombieAnimation('Scream', true, 'Idle');
+        CAMERA3D.currentMotion = null;
+        updateCameraZombieVisualByDistance();
     }
 
     function updateCameraEncounterUI() {
@@ -3298,6 +3384,7 @@
         if (distanceText && z && STATE.playerLocation) {
             distanceText.textContent = `Zumbi a ${Math.round(getDistance(STATE.playerLocation, z.loc))} m`;
         }
+        updateCameraZombieVisualByDistance();
     }
 
     function flashCameraDamage() {
@@ -3318,6 +3405,13 @@
         CAMERA3D.zombieAttackTimeout = setTimeout(() => {
             if (!STATE.cameraEncounterActive || STATE.encounterZombieHp <= 0 || STATE.isDead) return;
 
+            if (cameraDistanceForZombie() > CONFIG.cameraEncounterDistance) {
+                updateCameraZombieVisualByDistance();
+                scheduleCameraZombieAttack();
+                return;
+            }
+
+            CAMERA3D.currentMotion = null;
             playCameraZombieAnimation('Attack', true, 'Idle');
 
             setTimeout(() => {
@@ -3331,12 +3425,24 @@
         }, delay);
     }
 
-    async function startCameraEncounter() {
+    async function startCameraEncounter(forcedZombie = null) {
         if (STATE.cameraEncounterActive || STATE.isDead) return;
 
-        const candidate = getNearestEncounterCandidate();
+        let candidate = null;
+
+        if (forcedZombie && STATE.playerLocation) {
+            const distance = getDistance(STATE.playerLocation, forcedZombie.loc);
+            if (distance <= CONFIG.zombieRadarRadius) {
+                candidate = { zombie: forcedZombie, distance };
+            }
+        }
+
         if (!candidate) {
-            showToast('Nenhum zumbi próximo o bastante para enfrentar.', 'fa-skull', 'text-red-400');
+            candidate = getNearestEncounterCandidate() || getNearestDetectedZombieForCamera();
+        }
+
+        if (!candidate) {
+            showToast('Nenhum zumbi detectado para abrir na câmera.', 'fa-skull', 'text-red-400');
             updateEncounterAvailability();
             return;
         }
@@ -3344,7 +3450,7 @@
         if (!STATE.simMode &&
             Number.isFinite(STATE.gpsAccuracy) &&
             STATE.gpsAccuracy > CONFIG.cameraEncounterMaxAccuracy) {
-            showToast('Aguarde uma precisão melhor do GPS antes do encontro.', 'fa-location-crosshairs', 'text-yellow-300');
+            showToast('Aguarde uma precisão melhor do GPS antes de abrir a câmera.', 'fa-location-crosshairs', 'text-yellow-300');
             return;
         }
 
@@ -3411,8 +3517,10 @@
 
             loading.classList.add('hidden');
             STATE.encounterAttackReady = true;
-            attack.disabled = false;
-            scheduleCameraZombieAttack();
+            updateCameraZombieVisualByDistance();
+            if (cameraDistanceForZombie() <= CONFIG.cameraEncounterDistance) {
+                scheduleCameraZombieAttack();
+            }
         } catch (error) {
             console.error('A câmera abriu, mas o modelo 3D falhou:', error);
 
@@ -3427,7 +3535,7 @@
                 detail = 'Câmera ativa · arquivo zombie.glb não foi encontrado.';
             }
 
-            loadingText.innerHTML = `${detail}<br><small style="opacity:.72">Verifique se <b>assets/zombie.glb</b> está junto do index.html.</small>`;
+            loadingText.innerHTML = `${detail}<br><small style="opacity:.72">Verifique se <b>zombie.glb</b> está na mesma pasta do index.html.</small>`;
             showToast(detail, 'fa-cube', 'text-yellow-300');
 
             // Deixa um botão para tentar carregar o modelo novamente sem fechar a câmera.
@@ -3464,12 +3572,14 @@
             retry?.remove();
             loading.classList.add('hidden');
             STATE.encounterAttackReady = true;
-            attack.disabled = false;
-            scheduleCameraZombieAttack();
+            updateCameraZombieVisualByDistance();
+            if (cameraDistanceForZombie() <= CONFIG.cameraEncounterDistance) {
+                scheduleCameraZombieAttack();
+            }
             showToast('Zumbi 3D carregado.', 'fa-cube', 'text-emerald-300');
         } catch (error) {
             console.error('Nova tentativa do modelo 3D falhou:', error);
-            loadingText.innerHTML = 'Câmera ativa · o modelo 3D ainda não carregou.<br><small style="opacity:.72">Confira assets/zombie.glb e a conexão com os CDNs.</small>';
+            loadingText.innerHTML = 'Câmera ativa · o modelo 3D ainda não carregou.<br><small style="opacity:.72">Confira zombie.glb e a conexão com os CDNs.</small>';
             if (retry) retry.disabled = false;
         }
     }
@@ -3478,6 +3588,14 @@
         if (!STATE.cameraEncounterActive ||
             !STATE.encounterAttackReady ||
             STATE.encounterZombieHp <= 0) return;
+
+        const liveDistance = cameraDistanceForZombie();
+        if (liveDistance > CONFIG.cameraEncounterDistance) {
+            showToast(`O zumbi ainda está a ${Math.round(liveDistance)} m. O ataque libera a ${CONFIG.cameraEncounterDistance} m.`,
+                'fa-person-walking', 'text-yellow-300');
+            updateCameraZombieVisualByDistance();
+            return;
+        }
 
         const attackButton = document.getElementById('camera-attack');
         STATE.encounterAttackReady = false;
@@ -3501,7 +3619,7 @@
         setTimeout(() => {
             if (!STATE.cameraEncounterActive || STATE.encounterZombieHp <= 0) return;
             STATE.encounterAttackReady = true;
-            attackButton.disabled = false;
+            updateCameraZombieVisualByDistance();
         }, CONFIG.cameraPlayerAttackCooldown);
     }
 
@@ -4647,11 +4765,48 @@
             updateStatsUI();
         }
 
-        // Durante um encontro de câmera o mundo é congelado.
-        // Isso evita que o jogador seja atacado por múltiplos zumbis enquanto
-        // está olhando para a tela e impede o alvo de fugir do encontro.
+        // Durante a câmera, o restante do mundo fica congelado,
+        // mas o zumbi selecionado continua vindo em direção ao jogador.
         if (STATE.cameraEncounterActive) {
+            const target = getEncounterZombie();
+
+            if (!target) {
+                closeCameraEncounter();
+                return;
+            }
+
+            let distance = getDistance(STATE.playerLocation, target.loc);
+            const playerProtected = Boolean(safeZoneContaining(STATE.playerLocation));
+
+            if (!playerProtected && distance > CONFIG.zombieAttackRange) {
+                updateRouteDistances(now);
+
+                if (target.currentNodeId && STATE.roadNodes.size) {
+                    const speed = CONFIG.enemyChaseSpeed * (target.speedFactor || 1);
+                    advanceEnemyOnRoad(target, speed, true);
+                } else {
+                    let newLoc = chooseRoadStep(target.loc, STATE.playerLocation, CONFIG.enemyChaseSpeed);
+                    const blockedZone = safeZoneContaining(newLoc);
+                    if (blockedZone) newLoc = pointOutsideSafeZone(blockedZone, target.loc);
+                    target.loc = newLoc;
+                    target.marker.setLatLng(newLoc);
+                }
+            }
+
+            distance = getDistance(STATE.playerLocation, target.loc);
+            updateZombieDistanceLabel(target);
             updateCameraEncounterUI();
+
+            if (distance <= CONFIG.cameraEncounterDistance &&
+                !CAMERA3D.zombieAttackTimeout &&
+                STATE.encounterZombieHp > 0) {
+                scheduleCameraZombieAttack();
+            }
+
+            if (distance > CONFIG.zombieRadarRadius + 10) {
+                showToast('O zumbi saiu do alcance do radar.', 'fa-satellite-dish', 'text-slate-300');
+                closeCameraEncounter();
+            }
             return;
         }
 
