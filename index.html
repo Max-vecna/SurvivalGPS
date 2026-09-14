@@ -1613,6 +1613,26 @@
       border-color:rgba(254,202,202,.65);
     }
 
+
+    .camera-heading-hint{
+      position:absolute;
+      left:50%;
+      top:max(158px,calc(env(safe-area-inset-top) + 150px));
+      z-index:4;
+      transform:translateX(-50%);
+      padding:5px 9px;
+      border:1px solid rgba(255,255,255,.14);
+      border-radius:999px;
+      background:rgba(2,6,12,.58);
+      color:#dbeafe;
+      font-size:8px;
+      font-weight:850;
+      letter-spacing:.04em;
+      white-space:nowrap;
+      pointer-events:none;
+      backdrop-filter:blur(7px);
+    }
+
 </style>
 </head>
 <body>
@@ -1987,6 +2007,7 @@
         // GPS e mundo urbano
         gpsAccuracy: null,
         lastGpsFix: null,
+        movementHeading: null,
         worldCenter: null,
         roadPoints: [],
         roadNodes: new Map(),
@@ -2929,10 +2950,18 @@
         scene: null,
         camera: null,
         model: null,
+        template: null,
         baseScale: 1,
+        baseY: 0,
         currentMotion: null,
         mixer: null,
+        secondaryModels: new Map(),
         clips: [],
+        deviceHeading: null,
+        viewHeading: null,
+        orientationHandler: null,
+        lastOrientationAt: 0,
+        secondarySyncAt: 0,
         clock: null,
         raf: null,
         animTimeout: null,
@@ -2956,6 +2985,261 @@
         }
 
         startCameraEncounter(detected.zombie);
+    }
+
+    function normalize360(value) {
+        return ((value % 360) + 360) % 360;
+    }
+
+    function signedAngleDelta(value) {
+        let a = normalize360(value);
+        if (a > 180) a -= 360;
+        return a;
+    }
+
+    function geographicBearing(from, to) {
+        if (!from || !to) return 0;
+        const lat1 = from.lat * Math.PI / 180;
+        const lat2 = to.lat * Math.PI / 180;
+        const dLng = (to.lng - from.lng) * Math.PI / 180;
+        const y = Math.sin(dLng) * Math.cos(lat2);
+        const x = Math.cos(lat1) * Math.sin(lat2) -
+                  Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+        return normalize360(Math.atan2(y, x) * 180 / Math.PI);
+    }
+
+    function smoothHeading(current, next, amount = .18) {
+        if (!Number.isFinite(current)) return normalize360(next);
+        const delta = signedAngleDelta(next - current);
+        return normalize360(current + delta * amount);
+    }
+
+    function getScreenOrientationAngle() {
+        const raw =
+            (screen.orientation && Number.isFinite(screen.orientation.angle) ? screen.orientation.angle : null) ??
+            (Number.isFinite(window.orientation) ? window.orientation : 0);
+        return Number(raw) || 0;
+    }
+
+    function readDeviceHeading(event) {
+        if (!event) return null;
+
+        // iOS/Safari fornece diretamente o rumo magnético em graus.
+        if (Number.isFinite(event.webkitCompassHeading)) {
+            return normalize360(event.webkitCompassHeading);
+        }
+
+        // Em Android/Chrome alpha costuma crescer no sentido oposto ao rumo.
+        if (Number.isFinite(event.alpha)) {
+            const screenAngle = getScreenOrientationAngle();
+            return normalize360(360 - event.alpha + screenAngle);
+        }
+
+        return null;
+    }
+
+    async function enableCameraOrientation() {
+        const OrientationEvent = window.DeviceOrientationEvent;
+        if (!OrientationEvent) return false;
+
+        try {
+            if (typeof OrientationEvent.requestPermission === 'function') {
+                const permission = await OrientationEvent.requestPermission();
+                if (permission !== 'granted') return false;
+            }
+        } catch (error) {
+            console.warn('Permissão de orientação não concedida.', error);
+            return false;
+        }
+
+        if (CAMERA3D.orientationHandler) return true;
+
+        CAMERA3D.orientationHandler = event => {
+            const heading = readDeviceHeading(event);
+            if (!Number.isFinite(heading)) return;
+
+            CAMERA3D.deviceHeading = smoothHeading(CAMERA3D.deviceHeading, heading, .22);
+            CAMERA3D.viewHeading = CAMERA3D.deviceHeading;
+            CAMERA3D.lastOrientationAt = Date.now();
+        };
+
+        // O navegador pode oferecer apenas um dos dois eventos.
+        window.addEventListener('deviceorientationabsolute', CAMERA3D.orientationHandler, true);
+        window.addEventListener('deviceorientation', CAMERA3D.orientationHandler, true);
+        return true;
+    }
+
+    function currentCameraHeading() {
+        if (Number.isFinite(CAMERA3D.deviceHeading) &&
+            Date.now() - CAMERA3D.lastOrientationAt < 2500) {
+            return CAMERA3D.deviceHeading;
+        }
+
+        if (Number.isFinite(STATE.movementHeading)) {
+            CAMERA3D.viewHeading = smoothHeading(CAMERA3D.viewHeading, STATE.movementHeading, .08);
+            return CAMERA3D.viewHeading;
+        }
+
+        if (Number.isFinite(CAMERA3D.viewHeading)) {
+            return CAMERA3D.viewHeading;
+        }
+
+        const target = getEncounterZombie();
+        if (target && STATE.playerLocation) {
+            CAMERA3D.viewHeading = geographicBearing(STATE.playerLocation, target.loc);
+            return CAMERA3D.viewHeading;
+        }
+
+        return 0;
+    }
+
+    function getCameraDetectedZombies() {
+        if (!STATE.playerLocation ||
+            !STATE.zombieRadarEnabled ||
+            STATE.zombieRadarBattery <= 0) return [];
+
+        return ENTITIES.zombies
+            .map(zombie => ({
+                zombie,
+                distance: getDistance(STATE.playerLocation, zombie.loc)
+            }))
+            .filter(entry => entry.distance <= CONFIG.zombieRadarRadius)
+            .sort((a, b) => a.distance - b.distance)
+            .slice(0, 10);
+    }
+
+    function removeSecondaryCameraZombie(id) {
+        const entry = CAMERA3D.secondaryModels.get(id);
+        if (!entry) return;
+
+        try {
+            entry.mixer?.stopAllAction();
+            if (CAMERA3D.scene && entry.model) CAMERA3D.scene.remove(entry.model);
+        } catch (_) {}
+
+        CAMERA3D.secondaryModels.delete(id);
+    }
+
+    function syncSecondaryCameraZombies(force = false) {
+        if (!CAMERA3D.scene ||
+            !CAMERA3D.template ||
+            !CAMERA3D.THREE?.SkeletonUtils ||
+            !STATE.cameraEncounterActive) return;
+
+        const now = Date.now();
+        if (!force && now - CAMERA3D.secondarySyncAt < 900) return;
+        CAMERA3D.secondarySyncAt = now;
+
+        const detected = getCameraDetectedZombies();
+        const wantedIds = new Set(
+            detected
+                .map(entry => entry.zombie.id)
+                .filter(id => id !== STATE.encounterZombieId)
+        );
+
+        for (const id of [...CAMERA3D.secondaryModels.keys()]) {
+            if (!wantedIds.has(id)) removeSecondaryCameraZombie(id);
+        }
+
+        const walkClip =
+            CAMERA3D.clips.find(c => (c.name || '').toLowerCase().includes('walk')) ||
+            CAMERA3D.clips.find(c => (c.name || '').toLowerCase().includes('idle')) ||
+            null;
+
+        for (const { zombie } of detected) {
+            if (zombie.id === STATE.encounterZombieId) continue;
+            if (CAMERA3D.secondaryModels.has(zombie.id)) continue;
+
+            const clone = CAMERA3D.THREE.SkeletonUtils.clone(CAMERA3D.template);
+            clone.visible = true;
+            CAMERA3D.scene.add(clone);
+
+            const mixer = CAMERA3D.clips.length
+                ? new CAMERA3D.THREE.AnimationMixer(clone)
+                : null;
+
+            if (mixer && walkClip) {
+                const action = mixer.clipAction(walkClip);
+                action.reset();
+                action.setLoop(CAMERA3D.THREE.LoopRepeat, Infinity);
+                action.play();
+            }
+
+            CAMERA3D.secondaryModels.set(zombie.id, {
+                model: clone,
+                mixer
+            });
+        }
+    }
+
+    function positionCameraZombieModel(model, zombie, isPrimary = false) {
+        if (!model || !zombie || !STATE.playerLocation || !CAMERA3D.camera) return;
+
+        const distance = getDistance(STATE.playerLocation, zombie.loc);
+        const heading = currentCameraHeading();
+        const bearing = geographicBearing(STATE.playerLocation, zombie.loc);
+        const relativeBearing = signedAngleDelta(bearing - heading);
+
+        const farDistance = Math.max(
+            CONFIG.cameraEncounterDistance + 1,
+            Math.min(CONFIG.cameraViewMaxDistance || CONFIG.zombieRadarRadius, CONFIG.zombieRadarRadius)
+        );
+
+        const proximity = Math.max(0, Math.min(1,
+            (farDistance - distance) /
+            Math.max(1, farDistance - CONFIG.cameraEncounterDistance)
+        ));
+
+        const depth = CONFIG.cameraFarZ +
+            (CONFIG.cameraNearZ - CONFIG.cameraFarZ) * proximity;
+
+        const scaleFactor =
+            CONFIG.cameraFarScale +
+            (CONFIG.cameraNearScale - CONFIG.cameraFarScale) * proximity;
+
+        const relRad = relativeBearing * Math.PI / 180;
+
+        // Não removemos o modelo quando está atrás: apenas o colocamos fora
+        // do frustum. Ao girar o celular ele entra naturalmente na visão.
+        const visibleAngle = 86;
+        const clampedAngle = Math.max(-visibleAngle, Math.min(visibleAngle, relativeBearing));
+        const x = Math.abs(relativeBearing) >= 100
+            ? Math.sign(relativeBearing || 1) * 100
+            : Math.abs(depth) * Math.tan(clampedAngle * Math.PI / 180);
+
+        model.visible = distance <= CONFIG.zombieRadarRadius && Math.abs(relativeBearing) < 100;
+        model.position.x = x;
+        model.position.z = depth;
+        model.position.y = CAMERA3D.baseY;
+        model.scale.setScalar(CAMERA3D.baseScale * scaleFactor);
+
+        // O GLB estava invertido. A frente do personagem agora aponta
+        // permanentemente para a câmera, inclusive quando está nas laterais.
+        const towardCameraYaw = Math.atan2(-model.position.x, -model.position.z);
+        model.rotation.y = towardCameraYaw;
+
+        if (isPrimary) {
+            const walkTime = performance.now() / 1000;
+            model.position.x += Math.sin(walkTime * (1.7 + proximity)) * (0.025 + proximity * .025);
+        }
+    }
+
+    function updateCameraARScene() {
+        const primary = getEncounterZombie();
+        if (!primary || !CAMERA3D.model || !STATE.playerLocation) return;
+
+        syncSecondaryCameraZombies();
+
+        positionCameraZombieModel(CAMERA3D.model, primary, true);
+
+        for (const [zombieId, entry] of CAMERA3D.secondaryModels) {
+            const zombie = ENTITIES.zombies.find(z => z.id === zombieId);
+            if (!zombie) {
+                removeSecondaryCameraZombie(zombieId);
+                continue;
+            }
+            positionCameraZombieModel(entry.model, zombie, false);
+        }
     }
 
     function getNearestDetectedZombieForCamera() {
@@ -2994,31 +3278,20 @@
         if (!zombie || !CAMERA3D.model || !STATE.playerLocation) return;
 
         const distance = cameraDistanceForZombie(zombie);
-        const farDistance = Math.max(
-            CONFIG.cameraEncounterDistance + 1,
-            Math.min(CONFIG.cameraViewMaxDistance || CONFIG.zombieRadarRadius, CONFIG.zombieRadarRadius)
-        );
 
-        const t = Math.max(0, Math.min(1,
-            (farDistance - distance) /
-            Math.max(1, farDistance - CONFIG.cameraEncounterDistance)
-        ));
-
-        const zPos = CONFIG.cameraFarZ + (CONFIG.cameraNearZ - CONFIG.cameraFarZ) * t;
-        const scaleFactor = CONFIG.cameraFarScale +
-            (CONFIG.cameraNearScale - CONFIG.cameraFarScale) * t;
-
-        CAMERA3D.model.position.z = zPos;
-        CAMERA3D.model.scale.setScalar(CAMERA3D.baseScale * scaleFactor);
-
-        const walkTime = performance.now() / 1000;
-        CAMERA3D.model.position.x = Math.sin(walkTime * (1.7 + t)) * (0.05 + t * 0.035);
+        updateCameraARScene();
 
         const distanceText = document.getElementById('camera-distance-text');
         if (distanceText) {
+            const bearing = geographicBearing(STATE.playerLocation, zombie.loc);
+            const relative = signedAngleDelta(bearing - currentCameraHeading());
+            const direction =
+                Math.abs(relative) < 12 ? 'à frente' :
+                relative > 0 ? 'à direita' : 'à esquerda';
+
             distanceText.textContent = distance <= CONFIG.cameraEncounterDistance
-                ? `Zumbi a ${Math.round(distance)} m · ALCANCE DE COMBATE`
-                : `Zumbi vindo · ${Math.round(distance)} m`;
+                ? `Zumbi a ${Math.round(distance)} m · ${direction} · COMBATE`
+                : `Zumbi vindo · ${Math.round(distance)} m · ${direction}`;
         }
 
         const attack = document.getElementById('camera-attack');
@@ -3129,9 +3402,13 @@
             'three-gltf-loader',
             'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js'
         );
+        await loadExternalScriptOnce(
+            'three-skeleton-utils',
+            'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/SkeletonUtils.js'
+        );
 
-        if (!window.THREE || !window.THREE.GLTFLoader) {
-            throw new Error('Three.js/GLTFLoader indisponível');
+        if (!window.THREE || !window.THREE.GLTFLoader || !window.THREE.SkeletonUtils) {
+            throw new Error('Three.js/GLTFLoader/SkeletonUtils indisponível');
         }
         CAMERA3D.THREE = window.THREE;
     }
@@ -3219,6 +3496,17 @@
             CAMERA3D.resizeHandler = null;
         }
 
+        if (CAMERA3D.orientationHandler) {
+            window.removeEventListener('deviceorientationabsolute', CAMERA3D.orientationHandler, true);
+            window.removeEventListener('deviceorientation', CAMERA3D.orientationHandler, true);
+            CAMERA3D.orientationHandler = null;
+        }
+
+        for (const id of [...CAMERA3D.secondaryModels.keys()]) {
+            removeSecondaryCameraZombie(id);
+        }
+        CAMERA3D.secondaryModels.clear();
+
         if (CAMERA3D.model) {
             CAMERA3D.model.traverse(obj => {
                 if (obj.geometry) obj.geometry.dispose?.();
@@ -3241,8 +3529,14 @@
         CAMERA3D.scene = null;
         CAMERA3D.camera = null;
         CAMERA3D.model = null;
+        CAMERA3D.template = null;
         CAMERA3D.baseScale = 1;
+        CAMERA3D.baseY = 0;
         CAMERA3D.currentMotion = null;
+        CAMERA3D.deviceHeading = null;
+        CAMERA3D.viewHeading = null;
+        CAMERA3D.lastOrientationAt = 0;
+        CAMERA3D.secondarySyncAt = 0;
         CAMERA3D.mixer = null;
         CAMERA3D.clips = [];
         CAMERA3D.clock = null;
@@ -3302,7 +3596,7 @@
         });
 
         const model = gltf.scene;
-        model.rotation.y = Math.PI;
+        model.rotation.y = 0;
 
         // Normaliza automaticamente qualquer escala/unidade usada pelo GLB.
         let box = new THREE.Box3().setFromObject(model);
@@ -3326,6 +3620,10 @@
         if (scaledSize.y < 1.1) model.scale.multiplyScalar(1.25);
         CAMERA3D.baseScale = model.scale.x;
         model.position.z = CONFIG.cameraFarZ;
+        CAMERA3D.baseY = model.position.y;
+
+        // Template limpo para os demais zumbis detectados na visão AR.
+        CAMERA3D.template = THREE.SkeletonUtils.clone(model);
 
         scene.add(model);
 
@@ -3350,6 +3648,9 @@
             CAMERA3D.raf = requestAnimationFrame(renderFrame);
             const dt = Math.min(.05, CAMERA3D.clock.getDelta());
             if (CAMERA3D.mixer) CAMERA3D.mixer.update(dt);
+            for (const entry of CAMERA3D.secondaryModels.values()) {
+                entry.mixer?.update(dt);
+            }
 
             // Movimento respiratório/sutil para não parecer uma estátua quando
             // alguma animação do arquivo não estiver disponível.
@@ -3447,6 +3748,15 @@
             return;
         }
 
+        // Começa apontando para a direção do movimento; se ainda não houver
+        // rumo de caminhada, usa o bearing do zumbi-alvo para ele aparecer na frente.
+        CAMERA3D.viewHeading = Number.isFinite(STATE.movementHeading)
+            ? STATE.movementHeading
+            : geographicBearing(STATE.playerLocation, candidate.zombie.loc);
+
+        // iOS exige que essa solicitação ocorra a partir do clique do usuário.
+        enableCameraOrientation().catch(() => {});
+
         if (!STATE.simMode &&
             Number.isFinite(STATE.gpsAccuracy) &&
             STATE.gpsAccuracy > CONFIG.cameraEncounterMaxAccuracy) {
@@ -3530,7 +3840,7 @@
             const msg = String(error?.message || error || '');
 
             if (msg.includes('Three.js') || msg.includes('GLTFLoader')) {
-                detail = 'Câmera ativa · falha ao carregar a biblioteca 3D.';
+                detail = 'Câmera ativa · falha ao carregar a biblioteca 3D/AR.';
             } else if (msg.includes('404') || msg.includes('Failed to fetch') || msg.includes('fetch')) {
                 detail = 'Câmera ativa · arquivo zombie.glb não foi encontrado.';
             }
@@ -4051,6 +4361,22 @@
                         return;
                     }
 
+                    if (STATE.lastGpsFix) {
+                        const previous = L.latLng(STATE.lastGpsFix.lat, STATE.lastGpsFix.lng);
+                        const current = L.latLng(fix.lat, fix.lng);
+                        const movementDistance = getDistance(previous, current);
+                        const movementTime = Math.max(1, fix.time - STATE.lastGpsFix.time);
+
+                        // Ignora microvariações do GPS; rumo só muda com deslocamento real.
+                        if (movementDistance >= 2.5 && movementTime <= 20000) {
+                            const heading = geographicBearing(previous, current);
+                            STATE.movementHeading = smoothHeading(STATE.movementHeading, heading, .38);
+                            if (!Number.isFinite(CAMERA3D.deviceHeading)) {
+                                CAMERA3D.viewHeading = STATE.movementHeading;
+                            }
+                        }
+                    }
+
                     STATE.lastGpsFix = { ...fix };
                     applyLocation(L.latLng(fix.lat, fix.lng));
 
@@ -4151,6 +4477,8 @@
         if (moveInterval) clearInterval(moveInterval);
         moveInterval = setInterval(() => {
             let bearing = { 'N':0, 'E':90, 'S':180, 'W':270 }[dir];
+            STATE.movementHeading = bearing;
+            if (!Number.isFinite(CAMERA3D.deviceHeading)) CAMERA3D.viewHeading = bearing;
             applyLocation(getOffsetLatLng(STATE.playerLocation, 3, bearing));
         }, 100);
     }
