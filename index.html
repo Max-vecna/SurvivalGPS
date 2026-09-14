@@ -2136,6 +2136,10 @@
         cameraNearScale: 1.12,
         cameraRoadWidthMeters: 7,
         cameraRoadMaxSnapMeters: 18,
+        cameraGroundY: -1.28,
+        cameraRoadSurfaceOpacity: 0.14,
+        cameraRoadEdgeOpacity: 0.55,
+        cameraRoadCenterOpacity: 0.28,
         cameraGyroPitchLimit: 28,
         cameraGyroRollLimit: 18,
         cameraGyroSmoothing: 0.12,
@@ -3162,9 +3166,11 @@
 
         try {
             entry.mixer?.stopAllAction();
+            removeZombieContactShadow(entry.model);
             if (CAMERA3D.scene && entry.model) CAMERA3D.scene.remove(entry.model);
         } catch (_) {}
 
+        removeRoadCorridor(id);
         CAMERA3D.secondaryModels.delete(id);
     }
 
@@ -3261,8 +3267,14 @@
         model.visible = distance <= CONFIG.zombieRadarRadius && Math.abs(relativeBearing) < 100;
         model.position.x = x;
         model.position.z = depth;
-        model.position.y = CAMERA3D.baseY;
         model.scale.setScalar(CAMERA3D.baseScale * scaleFactor);
+
+        // Mantém a sola no mesmo plano do asfalto, mesmo quando a escala muda.
+        model.position.y =
+            (road?.groundY ?? CONFIG.cameraGroundY) +
+            CAMERA3D.modelFootOffset * scaleFactor;
+
+        updateZombieContactShadow(model, scaleFactor);
 
         // O GLB estava invertido. A frente do personagem agora aponta
         // permanentemente para a câmera, inclusive quando está nas laterais.
@@ -3378,23 +3390,102 @@
 
     function ensureRoadCorridorMaterial() {
         if (CAMERA3D.corridorMaterial || !CAMERA3D.THREE) return CAMERA3D.corridorMaterial;
+
         CAMERA3D.corridorMaterial = new CAMERA3D.THREE.MeshBasicMaterial({
-            color: 0x7dd3fc,
+            color: 0x5f7484,
             transparent: true,
-            opacity: 0.08,
+            opacity: CONFIG.cameraRoadSurfaceOpacity,
             depthWrite: false,
             side: CAMERA3D.THREE.DoubleSide
         });
+
+        CAMERA3D.corridorEdgeMaterial = new CAMERA3D.THREE.LineBasicMaterial({
+            color: 0x7dd3fc,
+            transparent: true,
+            opacity: CONFIG.cameraRoadEdgeOpacity,
+            depthWrite: false
+        });
+
+        CAMERA3D.corridorCenterMaterial = new CAMERA3D.THREE.LineDashedMaterial({
+            color: 0xf8fafc,
+            transparent: true,
+            opacity: CONFIG.cameraRoadCenterOpacity,
+            dashSize: 0.20,
+            gapSize: 0.16,
+            depthWrite: false
+        });
+
         return CAMERA3D.corridorMaterial;
     }
 
+    function ensureContactShadowResources() {
+        if (!CAMERA3D.THREE) return;
+        if (!CAMERA3D.contactShadowGeometry) {
+            CAMERA3D.contactShadowGeometry = new CAMERA3D.THREE.CircleGeometry(0.42, 28);
+        }
+        if (!CAMERA3D.contactShadowMaterial) {
+            CAMERA3D.contactShadowMaterial = new CAMERA3D.THREE.MeshBasicMaterial({
+                color: 0x000000,
+                transparent: true,
+                opacity: 0.28,
+                depthWrite: false,
+                side: CAMERA3D.THREE.DoubleSide
+            });
+        }
+    }
+
+    function ensureZombieContactShadow(model) {
+        if (!model || !CAMERA3D.THREE || !CAMERA3D.scene) return null;
+        ensureContactShadowResources();
+
+        let shadow = model.userData?.cameraContactShadow || null;
+        if (shadow) return shadow;
+
+        shadow = new CAMERA3D.THREE.Mesh(
+            CAMERA3D.contactShadowGeometry,
+            CAMERA3D.contactShadowMaterial
+        );
+        shadow.rotation.x = -Math.PI / 2;
+        shadow.renderOrder = -1;
+        CAMERA3D.scene.add(shadow);
+
+        model.userData.cameraContactShadow = shadow;
+        return shadow;
+    }
+
+    function updateZombieContactShadow(model, scaleFactor = 1) {
+        const shadow = ensureZombieContactShadow(model);
+        if (!shadow || !model) return;
+
+        shadow.visible = model.visible;
+        shadow.position.set(
+            model.position.x,
+            CONFIG.cameraGroundY + 0.012,
+            model.position.z
+        );
+
+        const s = Math.max(0.45, Math.min(1.6, scaleFactor));
+        shadow.scale.set(1.05 * s, 0.58 * s, 1);
+    }
+
+    function removeZombieContactShadow(model) {
+        const shadow = model?.userData?.cameraContactShadow;
+        if (!shadow) return;
+        try { CAMERA3D.scene?.remove(shadow); } catch (_) {}
+        if (model?.userData) delete model.userData.cameraContactShadow;
+    }
+
     function removeRoadCorridor(id) {
-        const mesh = CAMERA3D.roadCorridors.get(id);
-        if (!mesh) return;
+        const entry = CAMERA3D.roadCorridors.get(id);
+        if (!entry) return;
+
         try {
-            CAMERA3D.scene?.remove(mesh);
-            mesh.geometry?.dispose?.();
+            CAMERA3D.scene?.remove(entry.group);
+            entry.surface?.geometry?.dispose?.();
+            entry.edges?.geometry?.dispose?.();
+            entry.center?.geometry?.dispose?.();
         } catch (_) {}
+
         CAMERA3D.roadCorridors.delete(id);
     }
 
@@ -3421,51 +3512,141 @@
             return road;
         }
 
+        /*
+         * O retângulo é construído no plano XZ real da cena. A PerspectiveCamera
+         * cuida da convergência visual: a extremidade distante fica naturalmente
+         * menor, criando o efeito de asfalto em perspectiva.
+         */
         const avgDistance = Math.max(6, (a3.distance + b3.distance) * .5);
+        const avgDepth = Math.max(1.2, Math.abs((a3.z + b3.z) * .5));
         const widthScene = Math.max(
-            0.16,
-            Math.min(1.2, (CONFIG.cameraRoadWidthMeters / avgDistance) * Math.abs((a3.z + b3.z) * .5))
+            0.18,
+            Math.min(1.35, (CONFIG.cameraRoadWidthMeters / avgDistance) * avgDepth)
         );
 
         const nx = -dz / sceneLength;
         const nz = dx / sceneLength;
         const halfW = widthScene * .5;
+        const y = CONFIG.cameraGroundY;
 
-        const vertices = new Float32Array([
-            a3.x + nx * halfW, CAMERA3D.baseY - 0.95, a3.z + nz * halfW,
-            a3.x - nx * halfW, CAMERA3D.baseY - 0.95, a3.z - nz * halfW,
-            b3.x + nx * halfW, CAMERA3D.baseY - 0.95, b3.z + nz * halfW,
-            a3.x - nx * halfW, CAMERA3D.baseY - 0.95, a3.z - nz * halfW,
-            b3.x - nx * halfW, CAMERA3D.baseY - 0.95, b3.z - nz * halfW,
-            b3.x + nx * halfW, CAMERA3D.baseY - 0.95, b3.z + nz * halfW
+        const leftA  = { x: a3.x + nx * halfW, z: a3.z + nz * halfW };
+        const rightA = { x: a3.x - nx * halfW, z: a3.z - nz * halfW };
+        const leftB  = { x: b3.x + nx * halfW, z: b3.z + nz * halfW };
+        const rightB = { x: b3.x - nx * halfW, z: b3.z - nz * halfW };
+
+        const surfaceVertices = new Float32Array([
+            leftA.x,  y, leftA.z,
+            rightA.x, y, rightA.z,
+            leftB.x,  y, leftB.z,
+
+            rightA.x, y, rightA.z,
+            rightB.x, y, rightB.z,
+            leftB.x,  y, leftB.z
         ]);
 
-        let mesh = CAMERA3D.roadCorridors.get(zombie.id);
-        if (!mesh) {
-            const geometry = new CAMERA3D.THREE.BufferGeometry();
-            geometry.setAttribute('position', new CAMERA3D.THREE.BufferAttribute(vertices, 3));
-            mesh = new CAMERA3D.THREE.Mesh(geometry, ensureRoadCorridorMaterial());
-            mesh.renderOrder = -5;
-            CAMERA3D.scene.add(mesh);
-            CAMERA3D.roadCorridors.set(zombie.id, mesh);
+        const edgeVertices = new Float32Array([
+            leftA.x, y + .006, leftA.z, leftB.x, y + .006, leftB.z,
+            rightA.x, y + .006, rightA.z, rightB.x, y + .006, rightB.z
+        ]);
+
+        const centerVertices = new Float32Array([
+            a3.x, y + .010, a3.z,
+            b3.x, y + .010, b3.z
+        ]);
+
+        ensureRoadCorridorMaterial();
+
+        let entry = CAMERA3D.roadCorridors.get(zombie.id);
+
+        if (!entry) {
+            const group = new CAMERA3D.THREE.Group();
+            group.renderOrder = -8;
+
+            const surfaceGeometry = new CAMERA3D.THREE.BufferGeometry();
+            surfaceGeometry.setAttribute(
+                'position',
+                new CAMERA3D.THREE.BufferAttribute(surfaceVertices, 3)
+            );
+            const surface = new CAMERA3D.THREE.Mesh(
+                surfaceGeometry,
+                CAMERA3D.corridorMaterial
+            );
+            surface.renderOrder = -8;
+
+            const edgeGeometry = new CAMERA3D.THREE.BufferGeometry();
+            edgeGeometry.setAttribute(
+                'position',
+                new CAMERA3D.THREE.BufferAttribute(edgeVertices, 3)
+            );
+            const edges = new CAMERA3D.THREE.LineSegments(
+                edgeGeometry,
+                CAMERA3D.corridorEdgeMaterial
+            );
+            edges.renderOrder = -7;
+
+            const centerGeometry = new CAMERA3D.THREE.BufferGeometry();
+            centerGeometry.setAttribute(
+                'position',
+                new CAMERA3D.THREE.BufferAttribute(centerVertices, 3)
+            );
+            const center = new CAMERA3D.THREE.Line(
+                centerGeometry,
+                CAMERA3D.corridorCenterMaterial
+            );
+            center.computeLineDistances();
+            center.renderOrder = -6;
+
+            group.add(surface, edges, center);
+            CAMERA3D.scene.add(group);
+
+            entry = { group, surface, edges, center };
+            CAMERA3D.roadCorridors.set(zombie.id, entry);
         } else {
-            mesh.geometry.setAttribute('position', new CAMERA3D.THREE.BufferAttribute(vertices, 3));
-            mesh.geometry.attributes.position.needsUpdate = true;
-            mesh.geometry.computeBoundingSphere();
+            entry.surface.geometry.setAttribute(
+                'position',
+                new CAMERA3D.THREE.BufferAttribute(surfaceVertices, 3)
+            );
+            entry.surface.geometry.attributes.position.needsUpdate = true;
+            entry.surface.geometry.computeBoundingSphere();
+
+            entry.edges.geometry.setAttribute(
+                'position',
+                new CAMERA3D.THREE.BufferAttribute(edgeVertices, 3)
+            );
+            entry.edges.geometry.attributes.position.needsUpdate = true;
+            entry.edges.geometry.computeBoundingSphere();
+
+            entry.center.geometry.setAttribute(
+                'position',
+                new CAMERA3D.THREE.BufferAttribute(centerVertices, 3)
+            );
+            entry.center.geometry.attributes.position.needsUpdate = true;
+            entry.center.geometry.computeBoundingSphere();
+            entry.center.computeLineDistances();
         }
 
-        mesh.visible =
+        entry.group.visible =
             a3.distance <= CONFIG.zombieRadarRadius + 40 ||
             b3.distance <= CONFIG.zombieRadarRadius + 40;
 
-        return road;
+        return {
+            ...road,
+            groundY: y,
+            widthScene
+        };
     }
 
     function clearRoadCorridors() {
         for (const id of [...CAMERA3D.roadCorridors.keys()]) removeRoadCorridor(id);
         CAMERA3D.roadCorridors.clear();
+
         try { CAMERA3D.corridorMaterial?.dispose?.(); } catch (_) {}
+        try { CAMERA3D.corridorEdgeMaterial?.dispose?.(); } catch (_) {}
+        try { CAMERA3D.corridorCenterMaterial?.dispose?.(); } catch (_) {}
+
         CAMERA3D.corridorMaterial = null;
+        CAMERA3D.corridorEdgeMaterial = null;
+        CAMERA3D.corridorCenterMaterial = null;
     }
 
     function recalibrateCameraGyro() {
@@ -3745,6 +3926,7 @@
         clearRoadCorridors();
 
         if (CAMERA3D.model) {
+            removeZombieContactShadow(CAMERA3D.model);
             CAMERA3D.model.traverse(obj => {
                 if (obj.geometry) obj.geometry.dispose?.();
                 if (obj.material) {
@@ -3780,6 +3962,12 @@
         CAMERA3D.neutralGamma = null;
         CAMERA3D.lastOrientationAt = 0;
         CAMERA3D.secondarySyncAt = 0;
+        try { CAMERA3D.contactShadowGeometry?.dispose?.(); } catch (_) {}
+        try { CAMERA3D.contactShadowMaterial?.dispose?.(); } catch (_) {}
+        CAMERA3D.contactShadowGeometry = null;
+        CAMERA3D.contactShadowMaterial = null;
+        CAMERA3D.modelFootOffset = 0;
+
         CAMERA3D.mixer = null;
         CAMERA3D.clips = [];
         CAMERA3D.clock = null;
@@ -3863,7 +4051,15 @@
         if (scaledSize.y < 1.1) model.scale.multiplyScalar(1.25);
         CAMERA3D.baseScale = model.scale.x;
         model.position.z = CONFIG.cameraFarZ;
+
+        // Coloca a sola dos pés exatamente no plano virtual do asfalto.
+        let groundedBox = new THREE.Box3().setFromObject(model);
+        const correctionToGround = CONFIG.cameraGroundY - groundedBox.min.y;
+        model.position.y += correctionToGround;
+
+        groundedBox = new THREE.Box3().setFromObject(model);
         CAMERA3D.baseY = model.position.y;
+        CAMERA3D.modelFootOffset = model.position.y - groundedBox.min.y;
 
         // Template limpo para os demais zumbis detectados na visão AR.
         CAMERA3D.template = THREE.SkeletonUtils.clone(model);
@@ -3902,8 +4098,17 @@
 
             if (CAMERA3D.camera) {
                 CAMERA3D.camera.rotation.order = 'YXZ';
-                CAMERA3D.camera.rotation.x = -CAMERA3D.THREE.MathUtils.degToRad(CAMERA3D.devicePitch * .55);
-                CAMERA3D.camera.rotation.z = -CAMERA3D.THREE.MathUtils.degToRad(CAMERA3D.deviceRoll * .38);
+
+                // Pitch altera o horizonte; roll acompanha levemente a mão.
+                const pitchRad = CAMERA3D.THREE.MathUtils.degToRad(CAMERA3D.devicePitch * .62);
+                const rollRad = CAMERA3D.THREE.MathUtils.degToRad(CAMERA3D.deviceRoll * .30);
+
+                CAMERA3D.camera.rotation.x = -pitchRad;
+                CAMERA3D.camera.rotation.z = -rollRad;
+
+                // Pequena translação inercial evita sensação de câmera totalmente rígida.
+                CAMERA3D.camera.position.y = 1.15 + Math.sin(pitchRad) * 0.08;
+                CAMERA3D.camera.position.x = Math.sin(rollRad) * 0.035;
             }
 
             // Movimento respiratório/sutil para não parecer uma estátua quando
