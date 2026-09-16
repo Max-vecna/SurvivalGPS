@@ -173,8 +173,6 @@ async function ensureRoadWorld() {
     const around = `(around:${CONFIG.roadGraphRadius},${center.lat},${center.lng})`;
     const filters = new Set([...RESOURCE_HABITATS, ZOMBIE_HABITAT].flatMap(h => Object.entries(h.tags).map(([key, values]) => `["${key}"~"^(${values.join('|')})$"]`)));
     const query = `[out:json][timeout:25];(way["highway"~"^(${ROAD_TYPES})$"]${around};${[...filters].map(f => `nwr${f}${around};`).join('')});out geom;`;
-    const status = document.getElementById('world-status');
-    status.textContent = 'Carregando ruas e locais próximos…';
     try {
         let data;
         for (const endpoint of ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter']) {
@@ -198,8 +196,7 @@ async function ensureRoadWorld() {
         for (let i = 0; i < 6; i++) spawnZombie();
         await saveWorldCache();
         updateRadarVisibility();
-        status.textContent = 'Ruas mapeadas · recursos conforme os locais próximos';
     } catch (error) {
-        status.textContent = 'Não foi possível mapear esta área. Tentaremos novamente.';
+        console.warn('Não foi possível mapear esta área.', error);
     } finally { ROAD_WORLD.loading = false; ROAD_WORLD.attempted = Date.now(); }
 }

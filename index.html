@@ -212,7 +212,7 @@
     .radar-combined-path { stroke: var(--ink-color) !important; fill: transparent !important; stroke-dasharray: none !important; stroke-width: 2 !important; }
 
     /* Botões do Radar (HUD) */
-    .radar-control { position: absolute; z-index: 67; top: max(112px, calc(env(safe-area-inset-top) + 102px)); left: var(--left-safe); display: flex; flex-direction: column; gap: 7px; pointer-events: auto; }
+    .radar-control { position: absolute; z-index: 67; top: max(125px, calc(env(safe-area-inset-top) + 102px)); left: var(--left-safe); display: flex; flex-direction: column; gap: 7px; pointer-events: auto; }
     .radar-toggle {
       display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; min-width: 195px; min-height: 36px;
       background: rgba(253, 251, 247, 0.9) !important; border: 2px solid var(--ink-color) !important;
@@ -232,15 +232,7 @@
     }
     #encounter-button.visible { display: flex; }
     #encounter-button .encounter-distance { background: transparent; border: 1px dashed var(--paper-bg); padding: 2px 6px; border-radius: 10px; }
-
-    #world-status {
-      position: absolute; z-index: 66; right: -40px; top: -5px; transform: scale(.7) rotate(5deg);
-      padding: 4px 8px; border: 2px dashed var(--ink-color); background: var(--paper-bg);
-      font-size: 11px; font-weight: bold; color: var(--ink-color) !important;
-      max-width: min(245px, 62vw) !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
-
-    /* Visão AR da Câmera */
+/* Visão AR da Câmera */
     #camera-encounter { position: fixed; z-index: 9500; inset: 0; display: none; overflow: hidden; background: var(--paper-bg); color: var(--ink-color); }
     #camera-encounter.active { display: block; }
     #camera-feed { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
@@ -282,7 +274,7 @@
     .camera-hit-flash.flash { animation: cameraHitFlash 0.28s ease-out; }
     @keyframes cameraHitFlash { 0% { opacity: 1; } 100% { opacity: 0; } }
 
-    body.panel-open #top-hud, body.panel-open .radar-control, body.panel-open #world-status, body.panel-open #encounter-button { opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; }
+    body.panel-open #top-hud, body.panel-open .radar-control, body.panel-open #encounter-button { opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; }
     
     #game-over { background: rgba(253, 251, 247, 0.95) !important; color: var(--ink-color); }
     #game-over h2 { font-family: 'Kalam', cursive; text-decoration: underline wavy var(--red-pen); }
@@ -618,7 +610,7 @@ button[onclick*="closeCameraEncounter"]{
     #fence-build-controls button:disabled { opacity: 0.4; }
     body.panel-open #fence-build-controls, #fence-build-controls[hidden] { display: none; }
     #splash-screen { position: fixed; inset: 0; z-index: 20000; display: grid; place-items: center; padding: 24px; background: var(--paper-bg); }
-    #splash-screen[hidden], [data-tip-topic][hidden], #reset-confirmation[hidden], #splash-saved-location[hidden] { display: none; }
+    #splash-screen[hidden], [data-tip-topic][hidden], #reset-confirmation[hidden], #splash-saved-location[hidden], #splash-retry[hidden] { display: none !important; }
     .splash-card { max-width: 420px; text-align: center; }
     .splash-card h1 { font-size: 36px; font-weight: bold; }
     .splash-icon { font-size: 56px; margin-bottom: 20px; }
@@ -778,8 +770,518 @@ button[onclick*="closeCameraEncounter"]{
     .radar-management-card button,
     .safe-zone-card button,
     .safe-card button{
-      width:auto;
       max-width:100%;
+    }
+
+
+    /* ======================================================
+       MOCHILA, ARMAZÉM SEGURO, XP E ARMADILHAS REUTILIZÁVEIS
+       ====================================================== */
+    .player-level-strip{
+      margin:0 0 7px;
+      padding:4px 5px 5px;
+      /* border-top:2px dashed rgba(15,23,42,.35);
+      border-bottom:2px dashed rgba(15,23,42,.25); */
+    }
+    .player-level-line{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:8px;
+      color:var(--ink-color);
+      font-size:9px;
+      font-weight:700;
+    }
+    .player-level-line strong i{color:#ca8a04}
+    .player-xp-track,
+    .backpack-capacity-track{
+      height:7px;
+      margin-top:4px;
+      overflow:hidden;
+      border:1px solid var(--ink-color);
+      border-radius:999px;
+      background:rgba(255,255,255,.45);
+    }
+    #player-xp-fill{
+      width:0%;
+      height:100%;
+      background:#facc15;
+      transition:width .25s ease;
+    }
+
+    .backpack-overview{
+      margin-bottom:14px;
+      transform:rotate(-.15deg);
+    }
+    .backpack-overview-head,
+    .safe-storage-head{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+    }
+    .backpack-overview-head strong{
+      display:block;
+      margin-top:1px;
+      font-size:20px;
+    }
+    .backpack-kicker{
+      display:block;
+      color:var(--blue-pen);
+      font-size:9px;
+      font-weight:700;
+      letter-spacing:.06em;
+    }
+    .backpack-slots-label{
+      padding:4px 7px;
+      border:2px dashed var(--ink-color);
+      border-radius:10px;
+      font-size:10px;
+      font-weight:700;
+      white-space:nowrap;
+    }
+    #backpack-capacity-fill{
+      width:0%;
+      height:100%;
+      background:var(--blue-pen);
+      transition:width .2s ease;
+    }
+    #backpack-capacity-fill.warning{background:#d97706}
+    #backpack-capacity-fill.full{background:var(--red-pen)}
+    .backpack-upgrade-info{
+      margin:8px 0;
+      color:var(--muted);
+      font-size:10px;
+      font-weight:700;
+      line-height:1.35;
+    }
+    #backpack-upgrade-btn{width:100%}
+
+    .inventory-section-title{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:8px;
+      margin:8px 2px 20px;
+      padding-bottom:4px;
+      border-bottom:2px dashed var(--ink-color);
+      font-weight:700;
+    }
+    .inventory-section-title small{
+      color:var(--muted);
+      font-size:9px;
+    }
+
+    .inventory-item-actions{
+      width:100%;
+      display:grid;
+      grid-template-columns:repeat(2,minmax(0,1fr));
+      gap:6px;
+      margin-top:8px;
+    }
+    .inventory-item-actions button{width:100% !important}
+    .inventory-slot-note{
+      margin-top:3px;
+      color:var(--muted);
+      font-size:9px;
+      font-weight:700;
+    }
+
+    .safe-storage-section{
+      margin-top:16px;
+      transform:rotate(.12deg);
+    }
+    .safe-storage-head h3{
+      margin:2px 0 0;
+      font-size:17px;
+    }
+    .storage-access{
+      padding:4px 7px;
+      border:2px dashed currentColor;
+      border-radius:10px;
+      font-size:9px;
+      font-weight:700;
+    }
+    .storage-access.locked{color:var(--red-pen);background:#fee2e2}
+    .storage-access.open{color:#15803d;background:#dcfce7}
+    #safe-storage-message{
+      margin:8px 0;
+      color:var(--muted);
+      font-size:10px;
+      font-weight:700;
+    }
+    #safe-storage-actions{
+      display:flex;
+      flex-wrap:wrap;
+      gap:7px;
+      margin-bottom:9px;
+    }
+    #safe-storage-grid{
+      display:grid;
+      grid-template-columns:repeat(2,minmax(0,1fr));
+      gap:9px;
+    }
+    .storage-item{
+      position:relative;
+      padding:10px;
+      border:2px solid var(--ink-color);
+      border-radius:255px 15px 225px 15px / 15px 225px 15px 255px;
+      background:rgba(255,255,255,.72);
+      box-shadow:2px 3px 0 var(--shadow-color);
+    }
+    .storage-item-top{
+      display:flex;
+      align-items:center;
+      gap:7px;
+      margin-bottom:6px;
+    }
+    .storage-item-top i{font-size:18px}
+    .storage-item strong{font-size:11px}
+    .storage-item span{display:block;color:var(--muted);font-size:9px}
+    .storage-item button{width:100% !important;margin-top:5px}
+
+    .resource-map-icon.bag-full{
+      background:#fed7aa !important;
+      border-color:#c2410c !important;
+      color:#9a3412 !important;
+      box-shadow:0 0 0 4px rgba(234,88,12,.16),3px 4px 0 rgba(15,23,42,.22) !important;
+    }
+    .resource-map-icon.bag-full::after{
+      content:'CHEIA' !important;
+      color:#9a3412 !important;
+      border-color:#c2410c !important;
+    }
+
+    .trap-map-icon{
+      position:relative;
+      width:26px;
+      height:26px;
+      display:grid;
+      place-items:center;
+      border:2px solid var(--ink-color);
+      border-radius:45% 55% 50% 50% / 55% 45% 55% 45%;
+      box-shadow:2px 3px 0 rgba(15,23,42,.18);
+      font-size:12px;
+      font-weight:700;
+      transition:.15s ease;
+    }
+    .trap-map-icon.active{
+      color:#713f12;
+      background:#fde68a;
+      border-color:#a16207;
+    }
+    .trap-map-icon.inactive{
+      color:#475569;
+      background:#e2e8f0;
+      border-color:#64748b;
+    }
+    .trap-map-icon.inactive::after{
+      content:'1 sucata';
+      position:absolute;
+      left:50%;
+      bottom:29px;
+      transform:translateX(-50%) rotate(-1deg);
+      min-width:48px;
+      padding:2px 4px;
+      background:var(--paper-bg);
+      border:2px solid #64748b;
+      border-radius:9px;
+      color:#475569;
+      font-size:8px;
+      white-space:nowrap;
+    }
+
+    @media(max-width:420px){
+      #safe-storage-grid{grid-template-columns:1fr}
+      .inventory-item-actions{grid-template-columns:1fr}
+    }
+
+
+    /* HUD ocupa toda a largura */
+    #top-hud{
+      width:100% !important;
+      max-width:none !important;
+    }
+    .hud-row{
+      width:100% !important;
+      max-width:none !important;
+      align-items:stretch !important;
+    }
+    .hud-row > .status-card{
+      width:100% !important;
+      max-width:none !important;
+      flex:1 1 100% !important;
+    }
+
+    /* Mesma borda do sketch-grid-item */
+    .sketch-card-button,
+    .sketch-grid-item button,
+    .radar-management-card button,
+    .storage-item button,
+    .safe-zone-context-menu button,
+    #backpack-upgrade-btn,
+    #confirm-safe-zone-btn{
+      border:2px solid var(--ink-color) !important;
+      border-radius:255px 15px 225px 15px / 15px 225px 15px 255px !important;
+      box-shadow:3px 4px 0 var(--shadow-color) !important;
+    }
+
+    .safe-zone-context-menu{
+      position:absolute;
+      z-index:176;
+      left:max(10px,env(safe-area-inset-left));
+      bottom:max(14px,env(safe-area-inset-bottom));
+      width:min(355px,calc(100vw - 82px));
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      padding:9px 10px;
+      color:#14532d;
+      background:rgba(240,253,244,.96);
+      border:2px solid #15803d;
+      border-radius:255px 15px 225px 15px / 15px 225px 15px 255px;
+      box-shadow:4px 6px 0 rgba(20,83,45,.18);
+      transform:rotate(-.15deg);
+    }
+    .safe-zone-context-menu[hidden]{display:none !important}
+    .safe-zone-context-copy{
+      min-width:0;
+      display:flex;
+      flex-direction:column;
+      gap:1px;
+    }
+    .safe-zone-context-copy span{
+      font-size:11px;
+      font-weight:700;
+    }
+    .safe-zone-context-copy small{
+      color:#166534;
+      font-size:9px;
+      line-height:1.1;
+    }
+    .safe-zone-context-menu button{
+      flex:0 0 auto;
+      min-height:36px;
+      padding:7px 10px !important;
+    }
+
+    .safe-storage-columns{
+      display:grid;
+      grid-template-columns:repeat(2,minmax(0,1fr));
+      gap:14px;
+      margin-top:12px;
+    }
+    #safe-storage-backpack-grid,
+    #safe-storage-grid{
+      display:grid;
+      grid-template-columns:1fr;
+      gap:9px;
+    }
+    .storage-item{
+      border-radius:255px 15px 225px 15px / 15px 225px 15px 255px !important;
+    }
+
+    @media(max-width:680px){
+      .safe-storage-columns{grid-template-columns:1fr}
+    }
+
+
+    /* Armazém junto dos demais botões do menu */
+    #storage-nav-button[hidden]{
+      display:none !important;
+    }
+    #floating-nav .storage-nav-btn{
+      color:#14532d !important;
+      background:#dcfce7 !important;
+      border-color:#15803d !important;
+      box-shadow:0 0 0 3px rgba(34,197,94,.10), 2px 3px 0 rgba(20,83,45,.18) !important;
+    }
+    #floating-nav .storage-nav-btn:hover{
+      color:#052e16 !important;
+      background:#bbf7d0 !important;
+      border-color:#166534 !important;
+      transform:scale(1.04) rotate(-2deg);
+    }
+    #floating-nav .storage-nav-btn.active{
+      color:#052e16 !important;
+      background:#86efac !important;
+      border-color:#14532d !important;
+    }
+    #floating-nav .storage-nav-btn.active::after{
+      border-color:#15803d !important;
+    }
+
+
+    /* Cards sketch-grid-item com pin no canto superior direito */
+    .sketch-grid-item{
+      position:relative;
+      overflow:visible;
+    }
+    .sketch-grid-item::after{
+      content:"\f08d";
+      position:absolute;
+      top:-4px;
+      right:10px;
+      font-family:"Font Awesome 6 Free";
+      font-weight:900;
+      font-size:20px;
+      line-height:1;
+      color:#b91c1c;
+      text-shadow:1px 1px 0 rgba(255,255,255,.35);
+      transform:rotate(35deg);
+      pointer-events:none;
+      z-index:2;
+    }
+
+    /* Quando o card já tiver badge no topo, o pin continua um pouco mais para dentro */
+    .sketch-grid-item .absolute.-top-3.-right-3 + *{
+      position:relative;
+      z-index:1;
+    }
+
+
+    /* Inventário: quantidade à esquerda e informações em modal */
+    .inventory-count-badge{
+      position:absolute;
+      top:-10px;
+      left:-10px;
+      right:auto !important;
+      width:32px;
+      height:32px;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      z-index:12;
+      border:2px solid var(--ink-color);
+      border-radius:255px 15px 225px 15px / 15px 225px 15px 255px;
+      background:var(--paper-bg);
+      color:var(--ink-color);
+      font-size:12px;
+      font-weight:700;
+      box-shadow:2px 2px 0 var(--shadow-color);
+      transform:rotate(-4deg);
+    }
+
+    .inventory-card{
+      min-height:150px;
+      padding-top:20px;
+    }
+
+    .inventory-card-main{
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      flex:1 1 auto;
+      width:100%;
+    }
+
+    .inventory-item-actions{
+      grid-template-columns:minmax(0,1fr) 42px !important;
+      align-items:stretch;
+    }
+
+    .inventory-item-actions.only-info{
+      grid-template-columns:42px !important;
+      justify-content:center;
+    }
+
+    .inventory-info-button{
+      width:42px !important;
+      min-width:42px !important;
+      padding:0 !important;
+      font-size:15px !important;
+    }
+
+    .inventory-item-info-modal{
+      position:fixed;
+      inset:0;
+      z-index:9000;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:18px;
+      background:rgba(15,23,42,.38);
+      backdrop-filter:blur(2px);
+    }
+
+    .inventory-item-info-modal[hidden]{
+      display:none !important;
+    }
+
+    .inventory-item-info-card{
+      width:min(390px,100%);
+      padding:24px 22px 20px;
+      text-align:left;
+      transform:rotate(-.25deg);
+    }
+
+    .inventory-info-close{
+      position:absolute !important;
+      top:10px;
+      right:36px;
+      width:38px !important;
+      height:38px !important;
+      min-height:38px !important;
+      padding:0 !important;
+      border-radius:50% !important;
+      z-index:4;
+    }
+
+    .inventory-info-icon{
+      width:52px;
+      height:52px;
+      display:grid;
+      place-items:center;
+      margin-bottom:10px;
+      border:2px solid var(--ink-color);
+      border-radius:255px 15px 225px 15px / 15px 225px 15px 255px;
+      background:rgba(255,255,255,.68);
+      font-size:24px;
+      transform:rotate(-2deg);
+    }
+
+    .inventory-item-info-card h3{
+      margin:3px 0 8px;
+      padding-right:42px;
+      font-size:24px;
+      font-weight:700;
+    }
+
+    #inventory-item-info-description{
+      margin:0 0 14px;
+      color:var(--ink-color);
+      font-size:13px;
+      font-weight:600;
+      line-height:1.45;
+    }
+
+    .inventory-info-meta{
+      display:grid;
+      grid-template-columns:repeat(2,minmax(0,1fr));
+      gap:9px;
+    }
+
+    .inventory-info-meta > div{
+      padding:9px 10px;
+      border:2px dashed var(--ink-color);
+      border-radius:12px;
+      background:rgba(255,255,255,.48);
+    }
+
+    .inventory-info-meta span{
+      display:block;
+      color:var(--muted);
+      font-size:9px;
+      font-weight:700;
+      text-transform:uppercase;
+    }
+
+    .inventory-info-meta strong{
+      display:block;
+      margin-top:2px;
+      font-size:17px;
     }
 
 </style>
@@ -790,7 +1292,7 @@ button[onclick*="closeCameraEncounter"]{
     <i class="fa-solid fa-compass splash-icon" aria-hidden="true"></i>
     <h1>GPS Survival</h1>
     <p id="splash-status">Carregando o jogo...</p>
-    <button type="button" class="settings-action" onclick="retryGameLoading()">Tentar novamente</button>
+    <button id="splash-retry" type="button" class="settings-action sketch-card-button" hidden onclick="retryGameLoading()">Tentar novamente</button>
     <button id="splash-saved-location" type="button" class="settings-action sketch-card-button" hidden onclick="useSavedLocation()">Usar &#250;ltimo local salvo</button>
   </div>
 </section>
@@ -810,11 +1312,105 @@ button[onclick*="closeCameraEncounter"]{
           <div>
             <div class="panel-eyebrow">Equipamento</div>
             <h2><i class="fa-solid fa-box-open" aria-hidden="true"></i> Mochila</h2>
-            <p>Itens e materiais coletados.</p>
+            <p>Capacidade, melhorias e itens carregados pelo sobrevivente.</p>
           </div>
+        </div>
+
+        <section class="backpack-overview sketch-grid-item">
+          <div class="backpack-overview-head">
+            <div>
+              <span class="backpack-kicker">MOCHILA</span>
+              <strong>Nível <span id="backpack-level-label">1</span></strong>
+            </div>
+            <span id="backpack-slots-label" class="backpack-slots-label">0 / 12 slots</span>
+          </div>
+          <div class="backpack-capacity-track"><div id="backpack-capacity-fill"></div></div>
+          <div id="backpack-upgrade-info" class="backpack-upgrade-info"></div>
+          <button id="backpack-upgrade-btn" type="button" class="sketch-card-button is-blue" onclick="upgradeBackpack()">MELHORAR MOCHILA</button>
+        </section>
+
+        <div class="inventory-section-title">
+          <span><i class="fa-solid fa-person-walking-luggage"></i> Carregando</span>
+          <small>Cada unidade ocupa 1 slot</small>
         </div>
         <div id="inventory-grid"></div>
 </div>
+    </div>
+
+
+<div id="inventory-item-info-modal" class="inventory-item-info-modal" hidden
+     role="dialog" aria-modal="true" aria-labelledby="inventory-item-info-title"
+     onclick="if(event.target===this) closeInventoryItemInfo()">
+  <div class="inventory-item-info-card sketch-grid-item">
+    <button type="button" class="inventory-info-close" onclick="closeInventoryItemInfo()"
+            aria-label="Fechar informações" title="Fechar">
+      <i class="fa-solid fa-xmark"></i>
+    </button>
+
+    <div class="inventory-info-icon">
+      <i id="inventory-item-info-icon" class="fa-solid fa-circle-info"></i>
+    </div>
+
+    <span class="backpack-kicker">INFORMAÇÕES DO ITEM</span>
+    <h3 id="inventory-item-info-title">Item</h3>
+    <p id="inventory-item-info-description"></p>
+
+    <div class="inventory-info-meta">
+      <div>
+        <span>Quantidade</span>
+        <strong id="inventory-item-info-count">0</strong>
+      </div>
+      <div>
+        <span>Slots ocupados</span>
+        <strong id="inventory-item-info-slots">0</strong>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+    <div id="panel-storage" class="overlay-panel" aria-hidden="true">
+      <button type="button" class="panel-close" onclick="togglePanel('radar')" aria-label="Fechar armazém" title="Fechar"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+      <div class="panel-shell">
+        <div class="panel-header">
+          <div>
+            <div class="panel-eyebrow">Zona Segura</div>
+            <h2><i class="fa-solid fa-warehouse" aria-hidden="true"></i> Armazém</h2>
+            <p>Os itens guardados ficam disponíveis em qualquer zona segura.</p>
+          </div>
+        </div>
+
+        <section class="safe-storage-section sketch-grid-item">
+          <div class="safe-storage-head">
+            <div>
+              <span class="backpack-kicker">ARMAZÉM COMPARTILHADO</span>
+              <h3>Transferir itens</h3>
+            </div>
+            <span id="safe-storage-access" class="storage-access open">ACESSO LIBERADO</span>
+          </div>
+
+          <p id="safe-storage-message">Você está dentro de uma zona segura.</p>
+          <div id="safe-storage-actions"></div>
+
+          <div class="safe-storage-columns">
+            <section>
+              <div class="inventory-section-title">
+                <span><i class="fa-solid fa-person-walking-luggage"></i> Mochila</span>
+                <small id="storage-backpack-slots">0 slots</small>
+              </div>
+              <div id="safe-storage-backpack-grid"></div>
+            </section>
+
+            <section>
+              <div class="inventory-section-title">
+                <span><i class="fa-solid fa-box-archive"></i> Guardado</span>
+                <small>Compartilhado</small>
+              </div>
+              <div id="safe-storage-grid"></div>
+            </section>
+          </div>
+        </section>
+      </div>
     </div>
 
     <div id="panel-crafting" class="overlay-panel" aria-hidden="true">
@@ -908,7 +1504,7 @@ button[onclick*="closeCameraEncounter"]{
         <p>O descanso come&#231;a automaticamente assim que voc&#234; entra em uma zona segura. Enquanto permanecer protegido, a fadiga diminui. Acima de 80% fora da zona, a chance de persegui&#231;&#227;o aumenta.</p>
         <p>Fabrique medicina com 3 ervas medicinais e 1 &#225;gua para recuperar 40 de vida. Use 3 ervas arom&#225;ticas e 1 &#225;gua para fazer repelente: prote&#231;&#227;o por 90 segundos.</p>
       </section>
-      <section data-tip-topic="danger" class="sketch-grid-item rest-card" hidden><h3>&#193;reas de risco</h3><p>Hospitais, cl&#237;nicas, postos de sa&#250;de e cemit&#233;rios concentram mais zumbis nas ruas pr&#243;ximas, at&#233; 150 m. A chance de hordas tamb&#233;m aumenta nessas regi&#245;es.</p><p>Ao perseguir voc&#234; a at&#233; 35 m, zumbis podem sair das ruas. Zonas seguras e repelentes protegem contra ataques.</p></section>
+      <section data-tip-topic="danger" class="sketch-grid-item rest-card" hidden><h3>&#193;reas de risco</h3><p>Hospitais, cl&#237;nicas, postos de sa&#250;de e cemit&#233;rios concentram mais zumbis nas ruas pr&#243;ximas, at&#233; 150 m. A chance de hordas tamb&#233;m aumenta nessas regi&#245;es.</p><p>Ao perseguir voc&#234; a at&#233; 35 m, zumbis podem sair das ruas. Zonas seguras e repelentes protegem contra ataques.</p><p><b>Armadilhas:</b> cada zumbi eliminado concede 25 XP. Depois de disparar, a armadilha permanece no mapa desativada; aproxime-se e toque nela para reativar usando 1 sucata.</p><p><b>Mochila:</b> cada item ocupa 1 slot. Em zonas seguras, guarde itens no armaz&#233;m compartilhado e retire-os em qualquer outra zona segura.</p></section>
     </div>
   </div>
 
@@ -980,17 +1576,13 @@ button[onclick*="closeCameraEncounter"]{
   <div id="top-hud">
     <div class="hud-row">
       <div class="status-card">
-        <div id="world-status" aria-live="polite">
-            <i class="fa-solid fa-road"></i> Aguardando GPS para mapear as ruas
-        </div>
-        <div class="status-head">
-          <div class="status-title">
-            <div class="status-emblem"><i class="fa-solid fa-biohazard"></i></div>
-            <div>
-              <span>Zona de quarentena ativa</span>
-            </div>
+<div class="player-level-strip">
+          <div class="player-level-line">
+            <strong><i class="fa-solid fa-biohazard"></i> NÍVEL <span id="player-level-label">1</span></strong>
+            <span id="player-xp-label">0 / 100 XP</span>
           </div>
-</div>
+          <div class="player-xp-track"><div id="player-xp-fill"></div></div>
+        </div>
 
         <div class="meters">
           <div class="meter">
@@ -1043,7 +1635,8 @@ button[onclick*="closeCameraEncounter"]{
     <button type="button" class="nav-btn" onclick="togglePanel('radars', this)" aria-label="Radar" title="Radar"><i class="fa-solid fa-satellite-dish"></i></button>
     <button type="button" class="nav-btn" onclick="togglePanel('inventory', this)" aria-label="Mochila" title="Mochila"><i class="fa-solid fa-box-open"></i><span id="inv-badge" class="hidden"></span></button>
     <button type="button" class="nav-btn" onclick="togglePanel('crafting', this)" aria-label="Craft" title="Craft"><i class="fa-solid fa-hammer"></i></button>
-<button id="settings-nav-button" type="button" class="nav-btn" onclick="togglePanel('settings', this)" aria-label="Configura&#231;&#245;es" title="Configura&#231;&#245;es"><i class="fa-solid fa-gear" aria-hidden="true"></i></button>
+    <button id="storage-nav-button" type="button" class="nav-btn storage-nav-btn" hidden onclick="openSafeStoragePanel(this)" aria-label="Armazém" title="Armazém"><i class="fa-solid fa-warehouse"></i></button>
+    <button id="settings-nav-button" type="button" class="nav-btn" onclick="togglePanel('settings', this)" aria-label="Configura&#231;&#245;es" title="Configura&#231;&#245;es"><i class="fa-solid fa-gear" aria-hidden="true"></i></button>
 </nav>
 </div>
 <div id="game-over" class="fixed inset-0 hidden flex-col items-center justify-center z-[9999] p-4 text-center">
@@ -1078,7 +1671,7 @@ button[onclick*="closeCameraEncounter"]{
         gameLoopTimer: null,
         cameraEncounterActive: false, encounterZombieId: null, encounterZombieHp: 100, encounterAttackReady: true,
         cameraFacingMode: 'environment', cameraStream: null,
-        inventory: { wood: 0, scrap: 0, food: 0, water: 0, medkit: 0, trap: 0, safezone_kit: 1, fence: 0 }
+        inventory: { wood: 0, scrap: 0, food: 0, water: 0, medkit: 0, trap: 0, safezone_kit: 1, fence: 2 }
     };
 
     const ENTITIES = { zombies: [], resources: [], safeZones: [], traps: [] };
@@ -1090,6 +1683,18 @@ button[onclick*="closeCameraEncounter"]{
         water: { name: "Água Pura", icon: "fa-bottle-water", color: "text-blue-500", type: "consumable", desc: "Restaura 40 Sede.", actionText: "Beber", use: useWater },
         medkit: { name: "Kit Médico", icon: "fa-briefcase-medical", color: "text-emerald-500", type: "consumable", desc: "Restaura 40 Vida.", actionText: "Curar", use: useMedkit },
         trap: { name: "Armadilha", icon: "fa-burst", color: "text-yellow-500", type: "placeable", desc: "Mata um zumbi.", actionText: "Instalar", use: placeTrap },
+        fence: {
+            name: "Cerca de Perímetro",
+            icon: "fa-grip-lines-vertical",
+            color: "text-amber-600",
+            type: "placeable",
+            desc: "Marca trechos de perímetro caminhando. Feche o contorno para criar uma zona protegida.",
+            actionText: "Delimitar",
+            use: () => {
+                if (typeof window.startFenceBuild === "function") window.startFenceBuild();
+                else showToast("Sistema de cercas ainda está carregando.");
+            }
+        },
         safezone_kit: { name: "Sinalizador", icon: "fa-shield-halved", color: "text-blue-500", type: "placeable", desc: "Cria área protegida.", actionText: "Delimitar zona", use: placeSafeZone },
         battery_resource: { name: "Bateria (Rec)", icon: "fa-battery-half", color: "text-emerald-500", type: "energy", desc: "Recarrega radar." },
         battery_zombie: { name: "Bateria (Zum)", icon: "fa-battery-half", color: "text-red-500", type: "energy", desc: "Recarrega radar." }
@@ -1101,10 +1706,10 @@ button[onclick*="closeCameraEncounter"]{
     ];
 
     const CONFIG = {
-        zombieSpeed: 1.35, zombieDamage: 12, zombieAttackRange: 10, zombieDistanceLabelRange: 50, zombieAggroRange: 120, zombieAttackCooldown: 1600,
+        zombieSpeed: 1.35, zombieDamage: 4, zombieAttackRange: 10, zombieDistanceLabelRange: 50, zombieAggroRange: 120, zombieAttackCooldown: 1600,
         hungerDrainPerSecond: 0.022, thirstDrainPerSecond: 0.035, exhaustionDamagePerSecond: 1.2,
         resourcePickupRange: 25, trapRadius: 15, safeZoneRadius: 50, fenceSegmentLength: 12, fenceCloseDistance: 18, fenceMinPerimeterPoints: 4,
-        resourceRadarRadius: 90, zombieRadarRadius: 140, radarBatteryDrainPerSecond: 0.05, radarBatteryPickupRecharge: 35,
+        resourceRadarRadius: 90, zombieRadarRadius: 140, proximityRevealRadius: 10, radarBatteryDrainPerSecond: 0.05, radarBatteryPickupRecharge: 35,
         maxAcceptedAccuracy: 120, goodAccuracy: 45, teleportDistance: 220, teleportWindow: 8000, roadGraphRadius: 650, worldRefreshDistance: 320, worldRetryMs: 15000, roadPointStep: 18, roadSegmentLength: 16, routeRefreshMs: 1200, enemyWalkSpeed: 0.7, enemyChaseSpeed: 1.65, enemyWanderRadius: 90, minSpawnDistance: 35, minEntitySpacing: 16,
         cameraEncounterDistance: 25, cameraViewMaxDistance: 140, cameraFarZ: -9.0, cameraNearZ: -2.55, cameraFarScale: 0.58, cameraNearScale: 1.12, cameraRoadWidthMeters: 7, cameraRoadMaxSnapMeters: 18, cameraGroundY: -1.28, cameraRoadSurfaceOpacity: 0.14, cameraRoadEdgeOpacity: 0.55, cameraRoadCenterOpacity: 0.28, cameraGyroPitchLimit: 28, cameraGyroRollLimit: 18, cameraGyroSmoothing: 0.12, cameraEncounterMaxAccuracy: 65, cameraZombieHealth: 100, cameraPlayerDamage: 25, cameraZombieDamage: 10, cameraPlayerAttackCooldown: 650, cameraZombieAttackMinMs: 2300, cameraZombieAttackMaxMs: 3400, cameraModelUrl: './zombie.glb',
         maxZombies: 15, maxResources: 20, spawnRadius: 200, updateInterval: 1000, zombieVisualMoveMs: 920, zombieVisualMaxSnapDistance: 35
@@ -1209,6 +1814,7 @@ button[onclick*="closeCameraEncounter"]{
         if (btnElement && openingPanel) btnElement.classList.add('active');
 
         if (panelId === 'inventory') { document.getElementById('inv-badge').classList.add('hidden'); renderInventory(); }
+        else if (panelId === 'storage') renderSafeStorage();
         else if (panelId === 'crafting') renderCrafting();
         else if (panelId === 'gps') renderGpsStatus();
         else if (panelId === 'tips') renderResourceLegend();
@@ -1267,14 +1873,22 @@ button[onclick*="closeCameraEncounter"]{
                 const rotateClass = Math.random() > 0.5 ? 'rotate-1' : '-rotate-1';
 
                 grid.innerHTML += `
-                    <div class="sketch-grid-item flex flex-col items-center text-center transform ${rotateClass}">
-                        <span class="absolute -top-3 -right-3 w-8 h-8 rounded-full flex items-center justify-center font-bold z-10 bg-[var(--paper-bg)] border-2 border-[var(--ink-color)] shadow-[2px_2px_0_var(--shadow-color)]">${count}</span>
-                        <div class="mb-2">
-                            <i class="fa-solid ${itemDef.icon} text-3xl" style="color:var(--ink-color)"></i>
+                    <div class="sketch-grid-item inventory-card flex flex-col items-center text-center transform ${rotateClass}">
+                        <span class="inventory-count-badge">${count}</span>
+                        <div class="inventory-card-main">
+                            <div class="mb-2">
+                                <i class="fa-solid ${itemDef.icon} text-3xl" style="color:var(--ink-color)"></i>
+                            </div>
+                            <span class="font-bold text-sm">${itemDef.name}</span>
                         </div>
-                        <span class="font-bold text-sm mb-1">${itemDef.name}</span>
-                        <span class="text-xs flex-grow">${itemDef.desc}</span>
-                        ${actionBtnHTML}
+                        <div class="inventory-item-actions ${actionBtnHTML ? '' : 'only-info'}">
+                            ${actionBtnHTML}
+                            <button type="button" class="sketch-card-button is-blue inventory-info-button"
+                                    onclick="openInventoryItemInfo('${itemKey}')"
+                                    aria-label="Informações sobre ${itemDef.name}" title="Informações">
+                                <i class="fa-solid fa-circle-info"></i>
+                            </button>
+                        </div>
                     </div>
                 `;
             }
@@ -1485,8 +2099,16 @@ button[onclick*="closeCameraEncounter"]{
     function setMarkerVisible(marker, visible) { const onMap = map.hasLayer(marker); if (visible && !onMap) marker.addTo(map); else if (!visible && onMap) map.removeLayer(marker); }
     function isBatteryResource(resource) { return resource?.type === 'battery_resource' || resource?.type === 'battery_zombie'; }
     function isResourceDetected(resource) {
-        if (!STATE.playerLocation || !resource) return false; if (isBatteryResource(resource)) return true;
-        return STATE.resourceRadarEnabled && STATE.resourceRadarBattery > 0 && getDistance(STATE.playerLocation, resource.loc) <= CONFIG.resourceRadarRadius;
+        if (!STATE.playerLocation || !resource) return false;
+
+        // Baterias são sempre visíveis no mapa, independentemente do radar.
+        if (isBatteryResource(resource)) return true;
+
+        const distance = getDistance(STATE.playerLocation, resource.loc);
+        const radarActive = STATE.resourceRadarEnabled && STATE.resourceRadarBattery > 0;
+        const revealRadius = radarActive ? CONFIG.resourceRadarRadius : CONFIG.proximityRevealRadius;
+
+        return distance <= revealRadius;
     }
 
     const ZOMBIE_VISUAL = {
@@ -1597,15 +2219,26 @@ button[onclick*="closeCameraEncounter"]{
     }
     function updateAllZombieDistanceLabels() { if (!STATE.playerLocation) return; for (const z of ENTITIES.zombies) updateZombieDistanceLabel(z); }
 
+    function isZombieDetected(zombie) {
+        if (!STATE.playerLocation || !zombie) return false;
+
+        const distance = getDistance(STATE.playerLocation, zombie.loc);
+        const radarActive = STATE.zombieRadarEnabled && STATE.zombieRadarBattery > 0;
+        const revealRadius = radarActive ? CONFIG.zombieRadarRadius : CONFIG.proximityRevealRadius;
+
+        return distance <= revealRadius;
+    }
+
     function updateRadarVisibility() {
         if (!STATE.playerLocation) return;
-        const zombieOn = STATE.zombieRadarEnabled && STATE.zombieRadarBattery > 0;
+
         for (const res of ENTITIES.resources) {
             setMarkerVisible(res.marker, isResourceDetected(res));
             updateResourceCollectableState(res);
         }
+
         for (const z of ENTITIES.zombies) {
-            const shouldShow = zombieOn && getDistance(STATE.playerLocation, z.loc) <= CONFIG.zombieRadarRadius;
+            const shouldShow = isZombieDetected(z);
             const wasVisible = map.hasLayer(z.marker);
 
             setMarkerVisible(z.marker, shouldShow);
@@ -1615,6 +2248,7 @@ button[onclick*="closeCameraEncounter"]{
                 z.visualMove = null;
             }
         }
+
         updateAllZombieDistanceLabels();
         renderRadarManagement();
         refreshExploreStatus();
@@ -1869,6 +2503,8 @@ button[onclick*="closeCameraEncounter"]{
         const circle = L.circle(loc, { radius, color:'#15803d', weight:3, fillColor:'#86efac', fillOpacity:0.20, interactive:false }).addTo(map);
         STATE.inventory.safezone_kit--;
         ENTITIES.safeZones.push({ loc, radius, circle });
+        ejectZombiesFromSafeZones();
+        updateSafeZoneContextMenu();
         clearPendingSafeZone(); renderInventory(); refreshExploreStatus(); showToast('Zona criada.');
     }
     function safeZoneContaining(point) { return ENTITIES.safeZones.find(zone => zoneContainsPoint(zone, point)) || null; }
@@ -1961,7 +2597,7 @@ button[onclick*="closeCameraEncounter"]{
         marker.on('add', () => requestAnimationFrame(() => updateResourceCollectableState(resource)));
 
         ENTITIES.resources.push(resource);
-        setMarkerVisible(marker, isBatteryResource(resource) || isResourceDetected(resource));
+        setMarkerVisible(marker, isResourceDetected(resource));
         updateResourceCollectableState(resource);
     }
 
@@ -2034,6 +2670,7 @@ button[onclick*="closeCameraEncounter"]{
             if (BOOT.gpsWatch !== null) navigator.geolocation.clearWatch(BOOT.gpsWatch);
             BOOT.gpsWatch = navigator.geolocation.watchPosition((pos) => {
                 if (STATE.isDead && BOOT.finished) return;
+                BOOT.error = '';
                 const fix = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy || 999, time: Date.now() };
                 STATE.gpsAccuracy = fix.accuracy;
                 STATE.lastGpsFix = { ...fix };
@@ -2043,16 +2680,34 @@ button[onclick*="closeCameraEncounter"]{
                 }
                 applyLocation(L.latLng(fix.lat, fix.lng));
                 setGpsPill('good', `±${Math.round(fix.accuracy)}m`);
-            }, (err) => { setGpsPill('error', 'Sem GPS'); showToast('GPS indisponível.'); }, { enableHighAccuracy: true, maximumAge: 1500, timeout: 12000 });
-        } else { setGpsPill('error', 'Erro'); }
+            }, (err) => {
+                setGpsPill('error', 'Sem GPS');
+                showToast('GPS indisponível.');
+
+                if (!BOOT.finished) {
+                    BOOT.error = err?.code === 1
+                        ? 'Não foi possível acessar sua localização. Permita o GPS e tente novamente.'
+                        : 'Não foi possível obter sua localização. Tente novamente.';
+                    updateSplash();
+                }
+            }, { enableHighAccuracy: true, maximumAge: 1500, timeout: 12000 });
+        } else {
+            setGpsPill('error', 'Erro');
+            if (!BOOT.finished) {
+                BOOT.error = 'Este navegador não disponibilizou o GPS.';
+                updateSplash();
+            }
+        }
     }
 
     function applyLocation(latlng) {
+        BOOT.error = '';
         BOOT.locationReady = true;
         trackFatigueMovement(latlng);
         STATE.playerLocation = latlng; trackFenceWalk(latlng); if (!map.hasLayer(playerMarker)) playerMarker.addTo(map); playerMarker.setLatLng(latlng);
         ensureRadars(latlng); updateRadarVisibility(); updateAllZombieDistanceLabels(); updateAllResourceCollectableStates(); renderGpsStatus(); renderRadarMiniMap('resource'); renderRadarMiniMap('zombie');
         ensureRoadWorld();
+        if (!BOOT.finished) updateSplash();
         if (!mapCenteredOnce) { map.setView(latlng, 17); mapCenteredOnce = true; if (BOOT.finished) startGame(); }
     }
     function centerMap() { if (STATE.playerLocation) map.flyTo(STATE.playerLocation, 17, { animate: true }); }
@@ -2084,19 +2739,31 @@ function startGame() {
         for (let i = ENTITIES.zombies.length - 1; i >= 0; i--) {
             const z = ENTITIES.zombies[i];
             
-            let hitTrap = false;
+            // Garante que nenhum zumbi permaneça dentro de uma zona segura.
+            ejectZombieFromSafeZones(z);
+
+            let hitTrap = null;
             for (let j = ENTITIES.traps.length - 1; j >= 0; j--) {
-                if (getDistance(z.loc, ENTITIES.traps[j].loc) <= ENTITIES.traps[j].radius) { hitTrap = true; map.removeLayer(ENTITIES.traps[j].marker); ENTITIES.traps.splice(j, 1); break; }
+                const trap = ENTITIES.traps[j];
+                if (!trap.active) continue;
+                if (getDistance(z.loc, trap.loc) <= trap.radius) { hitTrap = trap; break; }
             }
-            if (hitTrap) { map.removeLayer(z.marker); ENTITIES.zombies.splice(i, 1); showToast('Zumbi caiu na armadilha!'); continue; }
+            if (hitTrap) {
+                triggerTrapKill(hitTrap);
+                map.removeLayer(z.marker);
+                ENTITIES.zombies.splice(i, 1);
+                continue;
+            }
 
             const distToPlayer = getDistance(STATE.playerLocation, z.loc);
             const chasing = zombieWantsToChase(z, now);
             
             moveSurvivalZombie(z, elapsed, chasing);
+            ejectZombieFromSafeZones(z);
 
             if (!playerProtected(now) && getDistance(STATE.playerLocation, z.loc) <= CONFIG.zombieAttackRange && now - (z.lastAttack || 0) >= CONFIG.zombieAttackCooldown) {
-                z.lastAttack = now; takeDamage(CONFIG.zombieDamage);
+                z.lastAttack = now;
+                takeDamage(calculateZombieDamage());
 
             }
         }
@@ -2160,6 +2827,7 @@ document.addEventListener('DOMContentLoaded', () => {
 <script src="road-world.js"></script>
 <script src="survival.js"></script>
 <script src="fences.js"></script>
+<script src="progression-inventory.js"></script>
 <script src="game-storage.js"></script>
 </body>
 </html>

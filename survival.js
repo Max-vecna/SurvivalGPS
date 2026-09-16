@@ -3,7 +3,15 @@ Object.assign(CONFIG, {
     maxZombies: 30, hordeInterval: 45000, hordeChance: 0.35,
     chaseChance: 0.35, chaseCheckInterval: 8000, chaseDuration: 15000,
     freeChaseRadius: 35, fatiguePerSecond: 0.025, fatiguePerMeter: 0.035,
-    restRecoveryPerSecond: 1.2, repellentDuration: 90000
+    restRecoveryPerSecond: 1.2, repellentDuration: 90000,
+
+    // Balanceamento de dano dos zumbis.
+    // Jogador saudável: 4 de dano.
+    // Fome/sede/fadiga máximas: até 10 de dano.
+    zombieDamageMaxMultiplier: 2.5,
+    zombieDamageHungerWeight: 0.35,
+    zombieDamageThirstWeight: 0.40,
+    zombieDamageFatigueWeight: 0.25
 });
 Object.assign(STATE, { fatigue: 0, resting: false, restOrigin: null, fatigueAnchor: null, fatigueWarned: false, repellentUntil: 0, lastHordeCheck: Date.now() });
 Object.assign(ITEMS_DB, {
@@ -23,6 +31,36 @@ RESOURCE_HABITATS.push(
     { types: ['healing_herb'], label: 'Ervas medicinais', places: 'Jardins, parques, hortas e florestas', tags: { leisure: ['garden', 'park'], landuse: ['allotments', 'forest'], natural: ['wood'] } },
     { types: ['aromatic_herb'], label: 'Ervas aromáticas', places: 'Jardins, parques, campos e pomares', tags: { leisure: ['garden', 'park'], landuse: ['meadow', 'orchard'], natural: ['scrub', 'grassland'] } }
 );
+function calculateZombieDamage() {
+    const hunger = Math.max(0, Math.min(100, Number(STATE.hunger) || 0));
+    const thirst = Math.max(0, Math.min(100, Number(STATE.thirst) || 0));
+    const fatigue = Math.max(0, Math.min(100, Number(STATE.fatigue) || 0));
+
+    // Fome e sede armazenam o quanto ainda resta:
+    // 100 = bem alimentado/hidratado, 0 = condição crítica.
+    const hungerDeficit = (100 - hunger) / 100;
+    const thirstDeficit = (100 - thirst) / 100;
+
+    // Fadiga funciona ao contrário:
+    // 0 = descansado, 100 = exausto.
+    const fatigueLevel = fatigue / 100;
+
+    const vulnerability =
+        hungerDeficit * CONFIG.zombieDamageHungerWeight +
+        thirstDeficit * CONFIG.zombieDamageThirstWeight +
+        fatigueLevel * CONFIG.zombieDamageFatigueWeight;
+
+    const multiplier = 1 + vulnerability * (CONFIG.zombieDamageMaxMultiplier - 1);
+
+    return Math.max(
+        CONFIG.zombieDamage,
+        Math.min(
+            CONFIG.zombieDamage * CONFIG.zombieDamageMaxMultiplier,
+            CONFIG.zombieDamage * multiplier
+        )
+    );
+}
+
 function playerProtected(now = Date.now()) {
     return !!STATE.playerLocation && (!!safeZoneContaining(STATE.playerLocation) || STATE.repellentUntil > now);
 }

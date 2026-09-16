@@ -1,7 +1,7 @@
 const GAME_DB_NAME = 'gps-survival';
 const GAME_STORE = { db: null, ready: false, resetting: false, timer: null, lastSaved: null };
 const BOOT = { dataReady: false, locationReady: false, finished: false, error: '', gpsWatch: null };
-const SAVED_STATE_KEYS = ['health', 'hunger', 'thirst', 'fatigue', 'isDead', 'resourceRadarBattery', 'zombieRadarBattery', 'resourceRadarEnabled', 'zombieRadarEnabled', 'resourceRadarLevel', 'zombieRadarLevel', 'repellentUntil', 'lastHordeCheck'];
+const SAVED_STATE_KEYS = ['health', 'hunger', 'thirst', 'fatigue', 'isDead', 'resourceRadarBattery', 'zombieRadarBattery', 'resourceRadarEnabled', 'zombieRadarEnabled', 'resourceRadarLevel', 'zombieRadarLevel', 'repellentUntil', 'lastHordeCheck', 'playerLevel', 'playerXp', 'backpackLevel', 'safeStorage'];
 function openGameDatabase() {
     return new Promise((resolve, reject) => {
         const request = indexedDB.open(GAME_DB_NAME, 1);
@@ -22,13 +22,13 @@ function gameDBTransaction(mode, action) {
 }
 function snapshotGame() {
     return {
-        version: 2, savedAt: Date.now(),
+        version: 3, savedAt: Date.now(),
         state: Object.fromEntries(SAVED_STATE_KEYS.map(key => [key, STATE[key]])),
         inventory: { ...STATE.inventory }, playerLocation: STATE.playerLocation,
         view: { center: map.getCenter(), zoom: map.getZoom() },
         draft: STATE.fenceBuildPoints,
         zones: ENTITIES.safeZones.map(z => z.points ? { points: z.points } : { loc: z.loc, radius: z.radius }),
-        traps: ENTITIES.traps.map(t => ({ loc: t.loc, radius: t.radius })),
+        traps: ENTITIES.traps.map(t => ({ id: t.id, loc: t.loc, radius: t.radius, active: t.active !== false, kills: t.kills || 0 })),
         resources: ENTITIES.resources.map(r => ({ id: r.id, type: r.type, loc: r.loc })),
         zombies: ENTITIES.zombies.map(z => ({ id: z.id, loc: z.loc, road: z.road, hordeId: z.hordeId, lastAttack: z.lastAttack, chasingUntil: z.chasingUntil, nextChaseCheck: z.nextChaseCheck, returnToRoad: z.returnToRoad }))
     };
@@ -83,10 +83,14 @@ function restoreGameSnapshot(saved, world) {
         spawnZombie({ loc: L.latLng(zombie.loc.lat, zombie.loc.lng), ...zombie.road }, zombie.hordeId);
         if (ENTITIES.zombies.length > count) Object.assign(ENTITIES.zombies.at(-1), { id: zombie.id, lastAttack: zombie.lastAttack || 0, chasingUntil: 0, nextChaseCheck: 0, returnToRoad: validGameLocation(zombie.returnToRoad) ? L.latLng(zombie.returnToRoad.lat, zombie.returnToRoad.lng) : null });
     }
+    ejectZombiesFromSafeZones();
+    STATE.playerLevel = Math.max(1, Math.floor(Number(STATE.playerLevel) || 1));
+    STATE.playerXp = Math.max(0, Math.floor(Number(STATE.playerXp) || 0));
+    STATE.backpackLevel = Math.max(1, Math.min(BACKPACK_LEVELS.length - 1, Math.floor(Number(STATE.backpackLevel) || 1)));
+    if (!STATE.safeStorage || typeof STATE.safeStorage !== 'object' || Array.isArray(STATE.safeStorage)) STATE.safeStorage = {};
+
     for (const trap of saved.traps || []) if (validGameLocation(trap.loc)) {
-        const loc = L.latLng(trap.loc.lat, trap.loc.lng);
-        const marker = L.marker(loc, { icon: L.divIcon({ className: 'trap-marker', iconSize: [12, 12], iconAnchor: [6, 12] }) }).addTo(map);
-        ENTITIES.traps.push({ loc, marker, radius: CONFIG.trapRadius });
+        createTrapEntity(L.latLng(trap.loc.lat, trap.loc.lng), trap);
     }
     if (validGameLocation(saved.view?.center)) map.setView(saved.view.center, Math.max(3, Math.min(19, saved.view.zoom || 17)));
     GAME_STORE.lastSaved = saved.savedAt;
@@ -102,23 +106,66 @@ function hasLoadedMapTiles() {
 }
 function updateSplash() {
     if (BOOT.finished) return;
+
     const status = document.getElementById('splash-status');
-    if (BOOT.error) { status.textContent = BOOT.error; return; }
-    if (!BOOT.dataReady) { status.textContent = 'Carregando seu progresso…'; return; }
-    if (!BOOT.locationReady) {
-        status.textContent = 'Aguardando GPS. Permita o acesso à localização para carregar sua região.';
-        document.getElementById('splash-saved-location').hidden = !STATE.playerLocation;
+    const retry = document.getElementById('splash-retry');
+    const savedLocation = document.getElementById('splash-saved-location');
+
+    // O botão de tentar novamente só aparece quando existe um erro real.
+    if (retry) retry.hidden = true;
+
+    if (BOOT.error) {
+        status.textContent = BOOT.error;
+        if (retry) retry.hidden = false;
+        if (savedLocation) savedLocation.hidden = !STATE.playerLocation;
         return;
     }
-    const roadsReady = ROAD_WORLD.center && getDistance(ROAD_WORLD.center, STATE.playerLocation) < CONFIG.worldRefreshDistance && ROAD_WORLD.segments.length;
-    if (!roadsReady) { status.textContent = ROAD_WORLD.loading ? 'Carregando ruas e locais próximos…' : 'Não foi possível carregar as ruas. Toque em Tentar novamente.'; return; }
-    if (!hasLoadedMapTiles()) { status.textContent = 'Carregando imagens do mapa. Se demorar, verifique a conexão e tente novamente.'; return; }
+
+    if (!BOOT.dataReady) {
+        status.textContent = 'Carregando seu progresso…';
+        return;
+    }
+
+    if (!BOOT.locationReady) {
+        status.textContent = 'Aguardando GPS. Permita o acesso à localização para carregar sua região.';
+        if (savedLocation) savedLocation.hidden = !STATE.playerLocation;
+        return;
+    }
+
+    const roadsReady =
+        ROAD_WORLD.center &&
+        getDistance(ROAD_WORLD.center, STATE.playerLocation) < CONFIG.worldRefreshDistance &&
+        ROAD_WORLD.segments.length;
+
+    if (!roadsReady) {
+        if (ROAD_WORLD.loading) {
+            status.textContent = 'Carregando ruas e locais próximos…';
+        } else {
+            status.textContent = 'Não foi possível carregar as ruas.';
+            if (retry) retry.hidden = false;
+        }
+        return;
+    }
+
+    if (!hasLoadedMapTiles()) {
+        status.textContent = 'Carregando imagens do mapa…';
+        return;
+    }
+
     BOOT.finished = true;
     document.getElementById('splash-screen').hidden = true;
-    document.body.classList.remove('booting'); document.getElementById('app-container').inert = false;
-    updateStatsUI(); renderSurvivalStatus(); updateRadarVisibility(); renderGpsStatus(); syncInteractionState();
+    document.body.classList.remove('booting');
+    document.getElementById('app-container').inert = false;
+
+    updateStatsUI();
+    renderSurvivalStatus();
+    updateRadarVisibility();
+    renderGpsStatus();
+    syncInteractionState();
+
     if (STATE.isDead) document.getElementById('game-over').classList.replace('hidden', 'flex');
     else startGame();
+
     queueGameSave();
 }
 function useSavedLocation() {
@@ -126,11 +173,21 @@ function useSavedLocation() {
     applyLocation(STATE.playerLocation);
 }
 function retryGameLoading() {
-    if (!BOOT.dataReady) { location.reload(); return; }
-    BOOT.error = ''; ROAD_WORLD.attempted = 0;
+    const retry = document.getElementById('splash-retry');
+    if (retry) retry.hidden = true;
+
+    if (!BOOT.dataReady) {
+        location.reload();
+        return;
+    }
+
+    BOOT.error = '';
+    ROAD_WORLD.attempted = 0;
     mapTiles.redraw();
+
     if (BOOT.locationReady) ensureRoadWorld();
     else initGPS();
+
     updateSplash();
 }
 async function initializeGame() {
@@ -148,7 +205,7 @@ async function initializeGame() {
         GAME_STORE.ready = true; BOOT.dataReady = true;
         await saveGameNow();
         if (migrated) localStorage.removeItem(FENCE_SAVE_KEY);
-        updateStatsUI(); renderSurvivalStatus(); renderGpsStatus(); syncInteractionState();
+        updateStatsUI(); renderSurvivalStatus(); renderPlayerProgression(); renderGpsStatus(); updateSafeZoneContextMenu(); syncInteractionState();
         initGPS(); updateSplash();
     } catch (error) {
         BOOT.error = 'Não foi possível abrir os dados salvos. Verifique o armazenamento do navegador e tente novamente.';

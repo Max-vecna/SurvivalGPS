@@ -30,6 +30,97 @@ function segmentHitsSafeZone(a, b) {
         return zone.points.some((point, i) => fenceSegmentsIntersect(a, b, point, zone.points[(i + 1) % zone.points.length]));
     });
 }
+
+function bearingBetweenPoints(a, b) {
+    const lat1 = a.lat * Math.PI / 180;
+    const lat2 = b.lat * Math.PI / 180;
+    const dLon = (b.lng - a.lng) * Math.PI / 180;
+    const y = Math.sin(dLon) * Math.cos(lat2);
+    const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+function polygonCentroidApprox(points) {
+    if (!points?.length) return null;
+    const sum = points.reduce((acc, p) => ({ lat: acc.lat + p.lat, lng: acc.lng + p.lng }), { lat: 0, lng: 0 });
+    return L.latLng(sum.lat / points.length, sum.lng / points.length);
+}
+
+function safeZoneEjectionPoint(zone, point, padding = 6) {
+    if (!zone || !point) return null;
+
+    if (!zone.points) {
+        const bearing = getDistance(zone.loc, point) > 0.25
+            ? bearingBetweenPoints(zone.loc, point)
+            : Math.random() * 360;
+        return getOffsetLatLng(zone.loc, zone.radius + padding, bearing);
+    }
+
+    let nearest = null;
+    let nearestDistance = Infinity;
+
+    for (let i = 0; i < zone.points.length; i++) {
+        const a = zone.points[i];
+        const b = zone.points[(i + 1) % zone.points.length];
+        const projected = roadProjection(point, a, b);
+        const distance = getDistance(point, projected);
+        if (distance < nearestDistance) {
+            nearestDistance = distance;
+            nearest = projected;
+        }
+    }
+
+    if (!nearest) return null;
+
+    const centroid = polygonCentroidApprox(zone.points);
+    let inwardBearing = centroid
+        ? bearingBetweenPoints(nearest, centroid)
+        : Math.random() * 360;
+
+    if (getDistance(nearest, point) > 0.25) {
+        inwardBearing = bearingBetweenPoints(nearest, point);
+    }
+
+    const outwardBearing = (inwardBearing + 180) % 360;
+
+    for (const extra of [padding, padding + 5, padding + 12, padding + 24, padding + 40]) {
+        const candidate = getOffsetLatLng(nearest, extra, outwardBearing);
+        if (!zoneContainsPoint(zone, candidate)) return candidate;
+    }
+
+    return getOffsetLatLng(nearest, padding + 50, outwardBearing);
+}
+
+function ejectZombieFromSafeZones(zombie) {
+    if (!zombie?.loc) return false;
+    let moved = false;
+
+    for (let guard = 0; guard < 4; guard++) {
+        const zone = safeZoneContaining(zombie.loc);
+        if (!zone) break;
+
+        const target = safeZoneEjectionPoint(zone, zombie.loc, 6 + guard * 4);
+        if (!target) break;
+
+        zombie.loc = L.latLng(target.lat, target.lng);
+        zombie.visualMove = null;
+        zombie.chasingUntil = 0;
+        zombie.returnToRoad = null;
+
+        if (zombie.marker) zombie.marker.setLatLng(zombie.loc);
+        moved = true;
+    }
+
+    return moved;
+}
+
+function ejectZombiesFromSafeZones() {
+    let count = 0;
+    for (const zombie of ENTITIES.zombies) {
+        if (ejectZombieFromSafeZones(zombie)) count++;
+    }
+    return count;
+}
 function fenceArea(points) {
     if (points.length < 3) return 0;
     const origin = points[0], scale = Math.cos(origin.lat * Math.PI / 180);
@@ -113,6 +204,8 @@ function finishFenceBuild() {
 function addFencedZone(points) {
     const polygon = L.polygon(points, { color: '#15803d', weight: 3, fillColor: '#86efac', fillOpacity: 0.20, interactive: false }).addTo(map);
     ENTITIES.safeZones.push({ points: points.map(p => L.latLng(p.lat, p.lng)), polygon });
+    ejectZombiesFromSafeZones();
+    if (typeof updateSafeZoneContextMenu === 'function') updateSafeZoneContextMenu();
 }
 function saveFenceProgress() {
     if (fenceSaveReady) queueGameSave();
